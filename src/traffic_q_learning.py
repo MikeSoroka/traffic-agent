@@ -53,37 +53,45 @@ import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------------
-# 1. CONFIGURABLE PARAMETERS
+# 1. CONFIGURATION SYSTEM
 # ---------------------------------------------------------------------------
+
+@dataclass
+class GlobalConfig:
+    # --- Master Seed for Reproducibility ---
+    MASTER_SEED: int = 42
+
+    # --- Q-Learning Hyperparameters ---
+    ALPHA: float = 0.10      # learning rate (alpha)
+    GAMMA: float = 0.95      # discount factor (gamma)
+    EPS_START: float = 1.0   # initial exploration rate
+    EPS_DECAY: float = 0.98  # per-episode multiplicative decay
+    EPS_MIN: float = 0.05    # exploration floor
+    NUM_BINS: int = 4        # state discretisation bins
+
+    # --- Simulation parameters ---
+    USE_GUI: bool = False
+    NUM_SECONDS: int = 3600    # simulated seconds per episode
+    DELTA_TIME: int = 5       # seconds between agent decisions
+    YELLOW_TIME: int = 2       # automatic yellow-phase buffer
+    MIN_GREEN: int = 5        # minimum green-phase duration
+
+    # --- Intersection & Traffic Intensity ---
+    NUM_LANES: int = 4                # Number of lanes at the single-intersection (defined in SUMO net)
+    TRAFFIC_INTENSITY: float = 1.0    # Scale factor for stochastically generated flows
+
+    # --- Output Directory ---
+    OUTPUT_DIR: str = "outputs"
+    TRAIN_EPISODES: int = 15
+
+# Instantiate the global configuration
+CONFIG = GlobalConfig()
 
 # --- Network files (resolved from the installed sumo_rl package) -----------
 _PKG_DIR = os.path.dirname(_ilu.find_spec("sumo_rl").origin)
 _NETS    = os.path.join(_PKG_DIR, "nets", "single-intersection")
 NET_FILE   = os.path.join(_NETS, "single-intersection.net.xml")
 ROUTE_FILE = os.path.join(_NETS, "single-intersection.rou.xml")
-
-# --- Output directory -------------------------------------------------------
-OUTPUT_DIR = "outputs"
-
-# --- Simulation parameters --------------------------------------------------
-USE_GUI     = False   # override with --gui
-NUM_SECONDS = 3600    # simulated seconds per episode
-DELTA_TIME  = 5       # seconds between agent decisions
-YELLOW_TIME = 2       # automatic yellow-phase buffer
-MIN_GREEN   = 5       # minimum green-phase duration
-
-# --- State discretisation ---------------------------------------------------
-NUM_BINS = 4          # bins per observation dimension  (0 … NUM_BINS-1)
-
-# --- Q-Learning hyperparameters ---------------------------------------------
-ALPHA     = 0.10      # learning rate
-GAMMA     = 0.95      # discount factor
-EPS_START = 1.0       # initial exploration rate
-EPS_DECAY = 0.98      # per-episode multiplicative decay
-EPS_MIN   = 0.05      # exploration floor
-
-# --- Training ---------------------------------------------------------------
-TRAIN_EPISODES = 15   # override with --episodes N
 
 # ---------------------------------------------------------------------------
 # 2. REWARD FUNCTIONS
@@ -137,7 +145,7 @@ CONFIGS: dict[str, dict] = {
 # 3. STATE DISCRETISATION
 # ---------------------------------------------------------------------------
 
-def discretize_state(obs: np.ndarray, num_bins: int = NUM_BINS) -> tuple:
+def discretize_state(obs: np.ndarray, num_bins: int = CONFIG.NUM_BINS) -> tuple:
     """
     Map a continuous observation vector ∈ [0,1]^n to a discrete tuple of
     bin indices ∈ {0, …, num_bins-1}^n usable as a Q-table dictionary key.
@@ -187,7 +195,7 @@ def bellman_update(
     """
     current  = _q(q_table, state,      n_actions)[action]
     next_max = np.max(_q(q_table, next_state, n_actions))
-    _q(q_table, state, n_actions)[action] += ALPHA * (reward + GAMMA * next_max - current)
+    _q(q_table, state, n_actions)[action] += CONFIG.ALPHA * (reward + CONFIG.GAMMA * next_max - current)
 
 # ---------------------------------------------------------------------------
 # 5. EPISODE RECORDER
@@ -228,17 +236,17 @@ def build_env(config_name: str, reward_fn, use_gui: bool = False):
     """Construct and return a configured SumoEnvironment."""
     from sumo_rl import SumoEnvironment  # deferred so the file imports without SUMO
 
-    csv_prefix = os.path.join(OUTPUT_DIR, config_name)
+    csv_prefix = os.path.join(CONFIG.OUTPUT_DIR, config_name)
     kwargs: dict = dict(
         net_file     = NET_FILE,
         route_file   = ROUTE_FILE,
         out_csv_name = csv_prefix,
         single_agent = True,
         use_gui      = use_gui,
-        num_seconds  = NUM_SECONDS,
-        delta_time   = DELTA_TIME,
-        yellow_time  = YELLOW_TIME,
-        min_green    = MIN_GREEN,
+        num_seconds  = CONFIG.NUM_SECONDS,
+        delta_time   = CONFIG.DELTA_TIME,
+        yellow_time  = CONFIG.YELLOW_TIME,
+        min_green    = CONFIG.MIN_GREEN,
     )
     if reward_fn is not None:
         kwargs["reward_fn"] = reward_fn
@@ -250,8 +258,9 @@ def build_env(config_name: str, reward_fn, use_gui: bool = False):
 
 def train(
     config_name: str,
-    episodes: int = TRAIN_EPISODES,
-    use_gui: bool = USE_GUI,
+    episodes: int = CONFIG.TRAIN_EPISODES,
+    use_gui: bool = CONFIG.USE_GUI,
+    seed: int = CONFIG.MASTER_SEED,
 ) -> dict:
     """
     Train a tabular Q-learning agent for one named configuration.
@@ -265,31 +274,39 @@ def train(
         config_name      – the config key used
         config           – the config dict
     """
+    # Seed both global NumPy generator for exploration and the environment setup
+    np.random.seed(seed)
+
     cfg = CONFIGS[config_name]
     env = build_env(config_name, cfg["reward_fn"], use_gui)
     n_actions = env.action_space.n
 
     q_table: dict = {}
-    epsilon       = EPS_START
+    epsilon       = CONFIG.EPS_START
     rewards_hist: list[float] = []
     first_record: EpisodeRecord | None = None
     last_record:  EpisodeRecord | None = None
 
+    episode_metrics: list[dict] = []
+
     print(
         f"\n{'='*62}\n"
         f"  Config : {config_name}  —  {cfg['label']}\n"
-        f"  Episodes: {episodes}   α={ALPHA}  γ={GAMMA}  "
-        f"bins={NUM_BINS}  actions={n_actions}\n"
+        f"  Episodes: {episodes}   α={CONFIG.ALPHA}  γ={CONFIG.GAMMA}  "
+        f"bins={CONFIG.NUM_BINS}  actions={n_actions}\n"
         f"{'='*62}"
     )
 
     for ep in range(1, episodes + 1):
-        obs, info = env.reset()
+        obs, info = env.reset(seed=seed + ep)
         state     = discretize_state(obs)
         record    = EpisodeRecord() if ep in (1, episodes) else None
 
         ep_reward  = 0.0
         terminated = truncated = False
+        
+        ep_stopped = []
+        ep_wait = []
 
         while not (terminated or truncated):
             action                               = select_action(q_table, state, n_actions, epsilon)
@@ -304,6 +321,10 @@ def train(
             state      = next_state
             obs        = next_obs
             ep_reward += reward
+            
+            # Track metrics for the episode
+            ep_stopped.append(float(info.get("system_total_stopped", 0)))
+            ep_wait.append(float(info.get("system_mean_waiting_time", 0.0)))
 
         if ep == 1:
             first_record = record
@@ -311,25 +332,30 @@ def train(
             last_record = record
 
         rewards_hist.append(ep_reward)
-        epsilon = max(EPS_MIN, epsilon * EPS_DECAY)
+        epsilon = max(CONFIG.EPS_MIN, epsilon * CONFIG.EPS_DECAY)
+        
+        # Save metrics for this episode
+        episode_metrics.append({
+            "episode":          ep,
+            "avg_queue":        sum(ep_stopped) / len(ep_stopped) if ep_stopped else 0,
+            "max_queue":        max(ep_stopped) if ep_stopped else 0,
+            "avg_waiting_time": sum(ep_wait) / len(ep_wait) if ep_wait else 0,
+        })
 
         print(
             f"  Ep {ep:3d}/{episodes}"
             f"  reward={ep_reward:10.2f}"
             f"  ε={epsilon:.3f}"
-            f"  steps={len(record.actions) if record else '?':>5}"
+            f"  steps={len(record.actions) if record else len(ep_stopped):>5}"
             f"  Q-states={len(q_table):6d}"
         )
 
     env.close()
 
     # Persist Q-table
-    qtable_path = f"q_table_{config_name}.npy"
+    qtable_path = os.path.join(CONFIG.OUTPUT_DIR, f"q_table_{config_name}.npy")
     np.save(qtable_path, np.array(q_table, dtype=object))
     print(f"  Q-table saved → {qtable_path}  ({len(q_table)} states)")
-
-    # Parse sumo-rl CSV files for per-episode summary metrics
-    episode_metrics = _parse_csv_metrics(config_name, episodes)
 
     return dict(
         config_name     = config_name,
@@ -343,32 +369,8 @@ def train(
     )
 
 # ---------------------------------------------------------------------------
-# 8. CSV PARSING
+# 8. CSV PARSING (Removed, tracking in memory instead)
 # ---------------------------------------------------------------------------
-
-def _parse_csv_metrics(config_name: str, episodes: int) -> list[dict]:
-    """
-    Read the per-step CSV files written by sumo-rl and compute per-episode
-    aggregate metrics: avg/max queue length and average waiting time.
-
-    sumo-rl names files as: {OUTPUT_DIR}/{config_name}_conn0_ep{N}.csv
-    (N is 1-indexed to match how we call env.reset() per episode).
-    """
-    prefix = os.path.join(OUTPUT_DIR, config_name)
-    results = []
-    for ep_idx in range(1, episodes + 1):
-        pattern = f"{prefix}_conn*_ep{ep_idx}.csv"
-        files   = sorted(glob.glob(pattern))
-        if not files:
-            continue
-        df = pd.read_csv(files[0])
-        results.append({
-            "episode":          ep_idx,
-            "avg_queue":        df["system_total_stopped"].mean(),
-            "max_queue":        df["system_total_stopped"].max(),
-            "avg_waiting_time": df["system_mean_waiting_time"].mean(),
-        })
-    return results
 
 # ---------------------------------------------------------------------------
 # 9. PLOTTING
@@ -382,7 +384,7 @@ def _smooth(values: list[float], frac: float = 0.20) -> tuple[np.ndarray, int]:
 
 
 def _save(fig: plt.Figure, filename: str) -> None:
-    path = os.path.join(OUTPUT_DIR, filename)
+    path = os.path.join(CONFIG.OUTPUT_DIR, filename)
     fig.savefig(path, dpi=150)
     plt.close(fig)
     print(f"  Saved {path}")
@@ -609,8 +611,8 @@ def plot_q_table_heatmap(result: dict) -> None:
     axes[0].set_title("State Value Estimate")
     axes[0].set_xlabel("Dim 0 — lane 1 density bin")
     axes[0].set_ylabel("Dim 1 — lane 2 density bin")
-    axes[0].set_xticks(range(NUM_BINS))
-    axes[0].set_yticks(range(NUM_BINS))
+    axes[0].set_xticks(range(CONFIG.NUM_BINS))
+    axes[0].set_yticks(range(CONFIG.NUM_BINS))
     axes[0].grid(alpha=0.3)
 
     sc2 = axes[1].scatter(
@@ -624,8 +626,8 @@ def plot_q_table_heatmap(result: dict) -> None:
     axes[1].set_title("Preferred Action (Greedy Policy)")
     axes[1].set_xlabel("Dim 0 — lane 1 density bin")
     axes[1].set_ylabel("Dim 1 — lane 2 density bin")
-    axes[1].set_xticks(range(NUM_BINS))
-    axes[1].set_yticks(range(NUM_BINS))
+    axes[1].set_xticks(range(CONFIG.NUM_BINS))
+    axes[1].set_yticks(range(CONFIG.NUM_BINS))
     axes[1].grid(alpha=0.3)
 
     fig.tight_layout()
@@ -678,7 +680,7 @@ def plot_final_comparison(results: list[dict]) -> None:
 
 def run_all(config_names: list[str], episodes: int, use_gui: bool) -> list[dict]:
     """Train all requested configurations sequentially and generate plots."""
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(CONFIG.OUTPUT_DIR, exist_ok=True)
 
     results: list[dict] = []
     for cname in config_names:
@@ -715,7 +717,7 @@ def run_all(config_names: list[str], episodes: int, use_gui: bool) -> list[dict]
     if len(results) > 1:
         plot_final_comparison(results)
 
-    print(f"\n  All outputs written to  {OUTPUT_DIR}/")
+    print(f"\n  All outputs written to  {CONFIG.OUTPUT_DIR}/")
     return results
 
 # ---------------------------------------------------------------------------
@@ -741,14 +743,14 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--episodes",
         type=int,
-        default=TRAIN_EPISODES,
+        default=CONFIG.TRAIN_EPISODES,
         metavar="N",
         help="Number of training episodes per configuration.",
     )
     p.add_argument(
         "--gui",
         action="store_true",
-        default=USE_GUI,
+        default=CONFIG.USE_GUI,
         help="Open the SUMO GUI window.",
     )
     return p.parse_args()
