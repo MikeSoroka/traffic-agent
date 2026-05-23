@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# SUMO / traffic-agent
+outputs/
+sumo-rl-nets/
+nets
+q_table.npy
