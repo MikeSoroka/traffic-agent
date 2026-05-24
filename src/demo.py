@@ -36,8 +36,8 @@ def evaluate(config_name: str, use_gui: bool, seed: int, episode: int | None = N
     if not os.path.exists(model_path):
         raise FileNotFoundError(
             f"\n[!] Trained Q-table model file not found at: {model_path}\n"
-            f"    Please run headless training first to generate this model, e.g.:\n"
-            f"    python src/headless_train.py --config {config_name} --episodes {episode if episode else 15}"
+            f"    Please run training first to generate this model, e.g.:\n"
+            f"    python src/train.py --config {config_name} --episodes {episode if episode else 15}"
         )
 
     print(f"  [★] Loading trained Q-table from: {model_path}")
@@ -89,10 +89,15 @@ def evaluate(config_name: str, use_gui: bool, seed: int, episode: int | None = N
                 )
         except Exception as e:
             # Gracefully catch case where user closes the SUMO GUI window manually
+            err_msg = str(e).lower()
+            err_class = e.__class__.__name__.lower()
             if (
-                "closed" in str(e).lower()
-                or "fatal" in str(e).lower()
-                or "traci" in str(e).lower()
+                "closed" in err_msg
+                or "fatal" in err_msg
+                or "traci" in err_msg
+                or "constructed" in err_msg
+                or "fatal" in err_class
+                or "traci" in err_class
             ):
                 print(
                     "\n  [★] SUMO GUI window closed by the user. Capturing metrics up to this step..."

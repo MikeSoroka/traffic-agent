@@ -36,7 +36,7 @@ CONFIGS = {
 # ---------------------------------------------------------------------------
 
 
-def run_headless_training(config_name: str, episodes: int, seed: int):
+def run_training(config_name: str, episodes: int, seed: int):
     if config_name not in CONFIGS:
         raise ValueError(f"Unknown configuration name: {config_name}")
 
@@ -53,8 +53,11 @@ def run_headless_training(config_name: str, episodes: int, seed: int):
 
     print(
         f"\n============================================================\n"
-        f"  [HEADLESS TRAINING] Config: {config_name}\n"
-        f"  Episodes: {episodes}  α={CONFIG.ALPHA}  γ={CONFIG.GAMMA}  seed={seed}\n"
+        f"  [TRAINING] Config: {config_name}\n"
+        f"  Intersection: {CONFIG.NUM_LANES} lanes | Traffic Intensity: {CONFIG.TRAFFIC_INTENSITY}\n"
+        f"  Hyperparams:  Episodes={episodes} | α={CONFIG.ALPHA} | γ={CONFIG.GAMMA}\n"
+        f"  Exploration:  ε-Start={CONFIG.EPS_START} | ε-Decay={CONFIG.EPS_DECAY} | ε-Min={CONFIG.EPS_MIN}\n"
+        f"  Simulation:   Duration={CONFIG.NUM_SECONDS}s | Control Step={CONFIG.DELTA_TIME}s\n"
         f"============================================================"
     )
 
@@ -133,6 +136,7 @@ def run_headless_training(config_name: str, episodes: int, seed: int):
             f"Reward: {ep_reward:9.2f} | "
             f"Avg Queue: {avg_q:5.2f} | "
             f"Avg Wait: {avg_w:5.2f}s | "
+            f"ε: {epsilon:.2f} | "
             f"Q-states: {len(q_table)}"
         )
 
@@ -157,7 +161,7 @@ def run_headless_training(config_name: str, episodes: int, seed: int):
 
 def main():
     p = argparse.ArgumentParser(
-        description="Headless training runner for Q-Learning traffic controller."
+        description="Training runner for Q-Learning traffic controller."
     )
     p.add_argument(
         "--config",
@@ -185,7 +189,7 @@ def main():
     configs_to_run = list(CONFIGS.keys()) if args.compare else [args.config]
 
     for cfg_name in configs_to_run:
-        run_headless_training(cfg_name, args.episodes, args.seed)
+        run_training(cfg_name, args.episodes, args.seed)
 
 
 if __name__ == "__main__":
