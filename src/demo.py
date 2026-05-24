@@ -5,12 +5,12 @@ from config import CONFIG, build_env, discretize_state, select_action
 
 # Define the configurations map to align with trained rewards
 CONFIGS = {
-    "default": {
-        "label": "Default Reward (Δ waiting time)",
+    "baseline": {
+        "label": "Baseline Reward (Δ waiting time)",
         "reward_fn": None,
     },
-    "quadratic": {
-        "label": "Quadratic Queue Penalty",
+    "custom": {
+        "label": "Custom Reward (Differential Queue)",
         "reward_fn": None,
     },
 }
@@ -136,7 +136,7 @@ def main():
     p.add_argument(
         "--config",
         choices=list(CONFIGS.keys()),
-        default="quadratic",
+        default="custom",
         help="Which trained configuration to load.",
     )
     p.add_argument(

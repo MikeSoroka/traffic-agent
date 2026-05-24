@@ -9,25 +9,37 @@ from config import CONFIG, build_env, discretize_state, select_action, bellman_u
 # ---------------------------------------------------------------------------
 
 
-def quadratic_queue_reward(ts) -> float:
+def custom_queue_reward(ts) -> float:
     """
-    Penalise the *square* of total queue length, amplifying the cost of large
-    backlogs. The agent learns to clear heavy queues quickly.
+    Traffic 'Differential Queue' Reward Model.
+    Reward = Previous Queue Size - Current Queue Size.
+    If the queue decreased, the reward is POSITIVE.
     """
-    total_queue: float = sum(
-        ts.sumo.lane.getLastStepHaltingNumber(lane) for lane in ts.lanes
+    current_queue = sum(
+        float(ts.sumo.lane.getLastStepHaltingNumber(lane)) for lane in ts.lanes
     )
-    return -(total_queue**2)
+
+    # Retrieve previous queue stored dynamically on the ts object
+    previous_queue = getattr(ts, "_last_queue_size", None)
+
+    # Update the dynamic attribute with the current value for the next step
+    ts._last_queue_size = current_queue
+
+    # If it is the first step of the episode, delta is 0.0
+    if previous_queue is None:
+        return 0.0
+
+    return float(previous_queue - current_queue)
 
 
 CONFIGS = {
-    "default": {
-        "label": "Default Reward (Δ waiting time)",
+    "baseline": {
+        "label": "Baseline Reward (Δ waiting time)",
         "reward_fn": None,
     },
-    "quadratic": {
-        "label": "Quadratic Queue Penalty",
-        "reward_fn": quadratic_queue_reward,
+    "custom": {
+        "label": "Custom Reward (Differential Queue)",
+        "reward_fn": custom_queue_reward,
     },
 }
 
@@ -128,6 +140,7 @@ def run_training(config_name: str, episodes: int, seed: int):
                 "max_queue": max_q,
                 "avg_waiting_time": avg_w,
                 "epsilon": epsilon,
+                "Q-states": len(q_table),
             }
         )
 
@@ -166,7 +179,7 @@ def main():
     p.add_argument(
         "--config",
         choices=list(CONFIGS.keys()),
-        default="default",
+        default="baseline",
         help="The reward configuration to train.",
     )
     p.add_argument(

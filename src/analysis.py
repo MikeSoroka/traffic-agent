@@ -74,10 +74,10 @@ def generate_training_rewards_plot(save: bool = False):
     fig, ax = plt.subplots(figsize=(10, 5))
 
     # Define visual colors for report styling
-    colors = {"default": "#5a9fd4", "quadratic": "#f0a050"}
+    colors = {"baseline": "#5a9fd4", "custom": "#f0a050"}
     labels = {
-        "default": "Default Reward (Δ waiting time)",
-        "quadratic": "Quadratic Queue Penalty",
+        "baseline": "Baseline Reward (Δ waiting time)",
+        "custom": "Custom Reward (Differential Queue)",
     }
 
     found_any = False
@@ -142,8 +142,8 @@ if IS_INTERACTIVE:
 
 # %%
 def generate_performance_metrics_plot(save: bool = False):
-    colors = {"default": "#5a9fd4", "quadratic": "#f0a050"}
-    labels = {"default": "Default Reward", "quadratic": "Quadratic Penalty"}
+    colors = {"baseline": "#5a9fd4", "custom": "#f0a050"}
+    labels = {"baseline": "Baseline Reward", "custom": "Custom Reward"}
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     found_any = False
@@ -340,7 +340,7 @@ def plot_episode_details(config_name: str, episode: int, save: bool = False):
 # %%
 # Inline test call
 if IS_INTERACTIVE:
-    plot_episode_details("quadratic", 1, save=False)
+    plot_episode_details("custom", 1, save=False)
 
 # %% [markdown]
 # ## 5. Comparative Retrospective Panel (Requirement #3 Complete)
@@ -445,7 +445,7 @@ def compare_episodes_offline(
 
 # %%
 # Interactive Comparison Variables
-compare_config = "quadratic"
+compare_config = "custom"
 episode_a = 1
 episode_b = 15
 
@@ -542,7 +542,7 @@ def generate_q_table_heatmap(config_name: str, label: str, save: bool = False):
 # %%
 # Inline test call
 if IS_INTERACTIVE:
-    generate_q_table_heatmap("quadratic", "Quadratic Queue Penalty", save=False)
+    generate_q_table_heatmap("custom", "Custom Reward (Differential Queue)", save=False)
 
 # %% [markdown]
 # ## 7. Final Comparative Performance Bar Chart
@@ -551,8 +551,8 @@ if IS_INTERACTIVE:
 
 # %%
 def generate_final_comparison_bar_chart(save: bool = False):
-    configs = ["default", "quadratic"]
-    labels = ["Default (Waiting Time)", "Quadratic (Queue Penalty)"]
+    configs = ["baseline", "custom"]
+    labels = ["Baseline (Waiting Time)", "Custom (Differential Queue)"]
     colors = ["#5a9fd4", "#f0a050"]
 
     valid_data = []
@@ -565,7 +565,7 @@ def generate_final_comparison_bar_chart(save: bool = False):
 
     if len(valid_data) < 2:
         print(
-            "  [!] Comparative bar chart skipped. Needs both 'default' and 'quadratic' summaries."
+            "  [!] Comparative bar chart skipped. Needs both 'baseline' and 'custom' summaries."
         )
         return
 
@@ -583,11 +583,11 @@ def generate_final_comparison_bar_chart(save: bool = False):
 
     for ax, mkey, mlabel in zip(axes, metric_keys, metric_labels):
         cfg_labels = [
-            labels[0] if item[0] == "default" else labels[1] for item in valid_data
+            labels[0] if item[0] == "baseline" else labels[1] for item in valid_data
         ]
         values = [item[1][mkey] for item in valid_data]
         bar_colors = [
-            colors[0] if item[0] == "default" else colors[1] for item in valid_data
+            colors[0] if item[0] == "baseline" else colors[1] for item in valid_data
         ]
 
         bars = ax.bar(
@@ -622,9 +622,40 @@ def generate_final_comparison_bar_chart(save: bool = False):
 
 
 # %%
+def generate_q_table_growth_plot(save: bool = False):
+    fig, ax = plt.subplots(figsize=(10, 5))
+    colors = {"baseline": "#5a9fd4", "custom": "#f0a050"}
+    labels = {"baseline": "Baseline Reward", "custom": "Custom Reward"}
+    
+    for config_name in colors.keys():
+        summary_path = os.path.join(CONFIG.DATA_DIR, f"{config_name}_summary.csv")
+        if os.path.exists(summary_path):
+            df = pd.read_csv(summary_path)
+            # Pull the logged state column over the 100 episodes
+            if "Q-states" in df.columns:
+                ax.plot(df["episode"], df["Q-states"], color=colors[config_name], 
+                        lw=2.5, label=labels[config_name])
+            
+    ax.set_xlabel("Episode", fontsize=11)
+    ax.set_ylabel("Total Explored States in Dictionary (|S|)", fontsize=11)
+    ax.set_title("Q-Table Expansion Curve: State-Space Discovery Over Time", fontsize=12, fontweight="bold")
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    
+    if save:
+        plot_path = os.path.join(CONFIG.PLOTS_DIR, "q_table_growth.pdf")
+        fig.savefig(plot_path, format="pdf", bbox_inches="tight")
+        plt.close(fig)
+        print(f"  [✔] Saved Q-table discovery curve → {plot_path}")
+    else:
+        plt.show()
+
+
+# %%
 # Inline test call
 if IS_INTERACTIVE:
     generate_final_comparison_bar_chart(save=False)
+    generate_q_table_growth_plot(save=False)
 
 # %% [markdown]
 # ## 8. Batch Run Plot Generator
@@ -647,12 +678,12 @@ def batch_generate_all_plots(save: bool = False):
 
     # 3. Before/After detailed schedules & heatmaps
     # Episode 1 representing random exploration behavior
-    plot_episode_details("default", 1, save=save)
-    plot_episode_details("quadratic", 1, save=save)
+    plot_episode_details("baseline", 1, save=save)
+    plot_episode_details("custom", 1, save=save)
 
     # Final episode showing trained behavior
     # Auto-detect final episode number from summary files
-    for config_name in ["default", "quadratic"]:
+    for config_name in ["baseline", "custom"]:
         summary_path = os.path.join(CONFIG.DATA_DIR, f"{config_name}_summary.csv")
         if os.path.exists(summary_path):
             df = pd.read_csv(summary_path)
@@ -660,14 +691,17 @@ def batch_generate_all_plots(save: bool = False):
             plot_episode_details(config_name, final_ep, save=save)
 
     # 4. State value heatmap projections
-    generate_q_table_heatmap("default", "Default Reward (Δ wait time)", save=save)
-    generate_q_table_heatmap("quadratic", "Quadratic Queue Penalty", save=save)
+    generate_q_table_heatmap("baseline", "Baseline Reward (Δ wait time)", save=save)
+    generate_q_table_heatmap("custom", "Custom Reward (Differential Queue)", save=save)
 
     # 5. Final episode comparison bars
     generate_final_comparison_bar_chart(save=save)
 
-    # 6. Retrospective comparative evolution (Episode 1 vs Final Episode)
-    for config_name in ["default", "quadratic"]:
+    # 6. Q-table state discovery growth curve over episodes
+    generate_q_table_growth_plot(save=save)
+
+    # 7. Retrospective comparative evolution (Episode 1 vs Final Episode)
+    for config_name in ["baseline", "custom"]:
         summary_path = os.path.join(CONFIG.DATA_DIR, f"{config_name}_summary.csv")
         if os.path.exists(summary_path):
             df = pd.read_csv(summary_path)
