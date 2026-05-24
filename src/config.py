@@ -3,17 +3,12 @@ import importlib.util as _ilu
 from dataclasses import dataclass
 import numpy as np
 
-# ---------------------------------------------------------------------------
-# 1. CONFIGURATION SYSTEM
-# ---------------------------------------------------------------------------
-
 
 @dataclass
 class GlobalConfig:
-    # --- Master Seed for Reproducibility ---
     MASTER_SEED: int = 0
 
-    # --- Q-Learning Hyperparameters ---
+    # Q-learning hyperparameters
     ALPHA: float = 0.20  # learning rate (alpha)
     GAMMA: float = 0.95  # discount factor (gamma)
     EPS_START: float = 1.0  # initial exploration rate
@@ -21,18 +16,18 @@ class GlobalConfig:
     EPS_MIN: float = 0.05  # exploration floor
     NUM_BINS: int = 4  # state discretisation bins
 
-    # --- Simulation parameters ---
+    # simulation parameters
     NUM_SECONDS: int = 3600  # simulated seconds per episode
     DELTA_TIME: int = 5  # seconds between agent decisions
     YELLOW_TIME: int = 2  # automatic yellow-phase buffer
     MIN_GREEN: int = 5  # minimum green-phase duration
 
-    # --- Intersection and Traffic Intensity ---
-    # Number of lanes at the single-intersection (defined in SUMO net)
+    # intersection and traffic intensity
+    # number of lanes at the single-intersection (defined in SUMO net)
     NUM_LANES: int = 1
-    TRAFFIC_INTENSITY: float = 1.0  # Scale factor for stochastically generated flows
+    TRAFFIC_INTENSITY: float = 1.0  # scale factor for stochastically generated flows
 
-    # --- Output Directory Layout ---
+    # output directory layout
     OUTPUT_DIR: str = "outputs"
     DATA_DIR: str = os.path.join(OUTPUT_DIR, "data")
     MODELS_DIR: str = os.path.join(OUTPUT_DIR, "models")
@@ -41,41 +36,38 @@ class GlobalConfig:
 
     TRAIN_EPISODES: int = 100
 
-    # --- Structural Traffic Rules ---
+    # structural traffic rules
     SPEED_LIMIT_M_S: float = 13.89  # 50 km/h urban velocity matching local regulations
-    BASE_SPAWN_PERIOD: float = (
-        4.0  # Seconds between vehicle generations at intensity 1.0
-    )
+    # seconds between vehicle generations at intensity 1.0
+    BASE_SPAWN_PERIOD: float = 4.0
 
-    # --- Route Selection Splits ---
+    # route selection splits
     SPLIT_STRAIGHT: float = 0.70  # 70% of vehicles travel across the intersection
     SPLIT_LEFT: float = 0.15  # 15% turn left
     SPLIT_RIGHT: float = 0.15  # 15% turn right
 
-    # --- Intersection Coordinates and Network Geometry ---
-    APPROACH_LENGTH_M: float = (
-        150.0  # Length of road approaches from intersection center
-    )
-    EDGE_PRIORITY: int = 7  # Priority value assigned to approach/exit edges
+    # intersection coordinates and geometry
+    # length of road approaches from intersection center
+    APPROACH_LENGTH_M: float = 150.0
+    EDGE_PRIORITY: int = 7  # priority value assigned to edges
 
-    # --- Vehicle Dynamics (Passenger Cars) ---
-    VEH_ACCEL: float = 2.6  # Acceleration (m/s^2)
-    VEH_DECEL: float = 4.5  # Deceleration (m/s^2)
-    VEH_SIGMA: float = 0.5  # Driver imperfection (0 to 1)
-    VEH_LENGTH: float = 5.0  # Vehicle physical length in meters
-    VEH_MIN_GAP: float = 2.5  # Minimum front-to-back safety gap in meters
+    # vehicle dynamics (passenger cars)
+    VEH_ACCEL: float = 2.6  # acceleration (m/s^2)
+    VEH_DECEL: float = 4.5  # deceleration (m/s^2)
+    VEH_SIGMA: float = 0.5  # driver imperfection (0 to 1)
+    VEH_LENGTH: float = 5.0  # vehicle physical length in meters
+    VEH_MIN_GAP: float = 2.5  # minimum front-to-back safety gap in meters
 
-    # --- Safety Floors for Traffic Generation ---
-    MIN_SPAWN_PERIOD: float = (
-        0.5  # Absolute floor for Poisson period to prevent SUMO overload
-    )
-    MIN_INTENSITY_FLOOR: float = 0.1  # Safety threshold to avoid division by zero
+    # safety floors for traffic generation
+    # absolute floor for Poisson period to prevent SUMO overload
+    MIN_SPAWN_PERIOD: float = 0.5
+    MIN_INTENSITY_FLOOR: float = 0.1  # safety threshold to avoid division by zero
 
 
-# Instantiate the global configuration
+# instantiate the global configuration
 CONFIG = GlobalConfig()
 
-# Create required directories
+# create required directories
 for d in (
     CONFIG.OUTPUT_DIR,
     CONFIG.DATA_DIR,
@@ -85,7 +77,7 @@ for d in (
 ):
     os.makedirs(d, exist_ok=True)
 
-# --- Network files (resolved from the installed sumo_rl package) -----------
+# network files (resolved from the installed sumo_rl package)
 _PKG_SPEC = _ilu.find_spec("sumo_rl")
 if _PKG_SPEC is None or _PKG_SPEC.origin is None:
     raise ImportError("sumo_rl package not found. Please install dependencies.")
@@ -94,44 +86,30 @@ _NETS = os.path.join(_PKG_DIR, "nets", "single-intersection")
 NET_FILE = os.path.join(_NETS, "single-intersection.net.xml")
 ROUTE_FILE = os.path.join(_NETS, "single-intersection.rou.xml")
 
-# ---------------------------------------------------------------------------
-# 2. STATE DISCRETISATION
-# ---------------------------------------------------------------------------
-
 
 def discretize_state(obs: np.ndarray, num_bins: int = CONFIG.NUM_BINS) -> tuple:
     """
     Map a continuous observation vector ∈ [0,1]^n to a discrete tuple of
-    bin indices ∈ {0, …, num_bins-1}^n usable as a Q-table dictionary key.
+    bin indices ∈ {0, …, num_bins-1}^n usable as a Q-table dictionary key
     """
     edges = np.linspace(0.0, 1.0, num_bins + 1)[1:-1]
     discrete = tuple(int(np.clip(np.digitize(x, edges), 0, num_bins - 1)) for x in obs)
     return discrete
 
 
-# ---------------------------------------------------------------------------
-# 3. ACTION SELECTION
-# ---------------------------------------------------------------------------
-
-
 def _q(q_table: dict, state: tuple, n_actions: int) -> np.ndarray:
-    """Return the Q-value row for `state`, lazily initialised to zeros."""
+    # return the Q-value row for state, lazily initialised to zeros
     if state not in q_table:
         q_table[state] = np.zeros(n_actions, dtype=np.float64)
     return q_table[state]
 
 
 def select_action(q_table: dict, state: tuple, n_actions: int, epsilon: float) -> int:
-    """Epsilon-greedy policy; ties in argmax broken by tiny random noise."""
+    # epsilon-greedy policy, ties in argmax broken by tiny random noise
     if np.random.rand() < epsilon:
         return int(np.random.randint(n_actions))
     q_vals = _q(q_table, state, n_actions)
     return int(np.argmax(q_vals + np.random.randn(n_actions) * 1e-9))
-
-
-# ---------------------------------------------------------------------------
-# 4. BELLMAN UPDATE
-# ---------------------------------------------------------------------------
 
 
 def bellman_update(
@@ -143,8 +121,8 @@ def bellman_update(
     n_actions: int,
 ) -> None:
     """
-    In-place Bellman update:
-        Q(s,a) ← Q(s,a) + α · [r + γ · max_a' Q(s',a') − Q(s,a)]
+    In-place Bellman update.
+    Q(s,a) ← Q(s,a) + α · [r + γ · max_a' Q(s',a') − Q(s,a)]
     """
     current = _q(q_table, state, n_actions)[action]
     next_max = np.max(_q(q_table, next_state, n_actions))
@@ -158,11 +136,11 @@ def generate_custom_scenario(
 ) -> tuple[str, str]:
     """
     Dynamically compile custom SUMO network and stochastically generated routes
-    based on user-configured intersection parameters (lanes, intensity).
+    based on user-configured intersection parameters
     """
     import subprocess
 
-    # 1. Generate custom nodes
+    # generate custom nodes
     nodes_path = os.path.join(CONFIG.NETS_DIR, "custom_nodes.nod.xml")
     nodes_content = f"""
     <nodes>
@@ -176,7 +154,7 @@ def generate_custom_scenario(
     with open(nodes_path, "w") as f:
         f.write(nodes_content)
 
-    # 2. Generate custom edges with user-defined number of lanes
+    # generate custom edges with user-defined number of lanes
     edges_path = os.path.join(CONFIG.NETS_DIR, "custom_edges.edg.xml")
     edges_content = f"""
     <edges>
@@ -194,7 +172,7 @@ def generate_custom_scenario(
     with open(edges_path, "w") as f:
         f.write(edges_content)
 
-    # 3. Compile network using netconvert
+    # compile network using netconvert
     net_path = os.path.join(CONFIG.NETS_DIR, "custom_net.net.xml")
     cmd = [
         "netconvert",
@@ -207,14 +185,13 @@ def generate_custom_scenario(
         cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
 
-    # 4. Generate stochastic route flows based on traffic intensity
-    # Base period is adjusted inversely based on intensity
+    # generate stochastic route flows based on traffic intensity
     period = max(
         CONFIG.MIN_SPAWN_PERIOD,
         CONFIG.BASE_SPAWN_PERIOD / max(CONFIG.MIN_INTENSITY_FLOOR, traffic_intensity),
     )
 
-    # We allocate traffic stochastically based on route splits in configuration
+    # allocate traffic stochastically based on route splits in configuration
     period_straight = period / CONFIG.SPLIT_STRAIGHT
     period_left = period / CONFIG.SPLIT_LEFT
     period_right = period / CONFIG.SPLIT_RIGHT
@@ -267,16 +244,11 @@ def generate_custom_scenario(
     return net_path, rou_path
 
 
-# ---------------------------------------------------------------------------
-# 5. ENVIRONMENT BUILDER
-# ---------------------------------------------------------------------------
-
-
 def build_env(config_name: str, reward_fn, use_gui: bool = False):
-    """Construct and return a configured SumoEnvironment."""
-    from sumo_rl import SumoEnvironment  # deferred so the file imports without SUMO
+    """Construct and return a configured SumoEnvironment"""
+    from sumo_rl import SumoEnvironment
 
-    # Dynamically compile the user-defined road intersection network and stochastically generated routes
+    # dynamically compile the user-defined road network and route files
     custom_net_file, custom_route_file = generate_custom_scenario(
         CONFIG.NUM_LANES, CONFIG.TRAFFIC_INTENSITY
     )

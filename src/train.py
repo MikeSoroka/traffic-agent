@@ -4,28 +4,20 @@ import numpy as np
 import pandas as pd
 from config import CONFIG, build_env, discretize_state, select_action, bellman_update
 
-# ---------------------------------------------------------------------------
-# 1. REWARD CONFIGURATIONS
-# ---------------------------------------------------------------------------
-
 
 def custom_queue_reward(ts) -> float:
-    """
-    Traffic 'Differential Queue' Reward Model.
-    Reward = Previous Queue Size - Current Queue Size.
-    If the queue decreased, the reward is POSITIVE.
-    """
+    """Custom reward function for Q-learning"""
+    # reward = previous queue - current queue
     current_queue = sum(
         float(ts.sumo.lane.getLastStepHaltingNumber(lane)) for lane in ts.lanes
     )
 
-    # Retrieve previous queue stored dynamically on the ts object
     previous_queue = getattr(ts, "_last_queue_size", None)
 
-    # Update the dynamic attribute with the current value for the next step
+    # update the attribute for the next step
     ts._last_queue_size = current_queue
 
-    # If it is the first step of the episode, delta is 0.0
+    # if first step
     if previous_queue is None:
         return 0.0
 
@@ -43,10 +35,6 @@ CONFIGS = {
     },
 }
 
-# ---------------------------------------------------------------------------
-# 2. TRAINING LOGIC
-# ---------------------------------------------------------------------------
-
 
 def run_training(config_name: str, episodes: int, seed: int):
     if config_name not in CONFIGS:
@@ -56,7 +44,6 @@ def run_training(config_name: str, episodes: int, seed: int):
     env = build_env(config_name, cfg["reward_fn"], use_gui=False)
     n_actions = env.action_space.n
 
-    # Set master seed for reproducibility
     np.random.seed(seed)
 
     q_table = {}
@@ -64,13 +51,10 @@ def run_training(config_name: str, episodes: int, seed: int):
     episode_summary_data = []
 
     print(
-        f"\n============================================================\n"
-        f"  [TRAINING] Config: {config_name}\n"
-        f"  Intersection: {CONFIG.NUM_LANES} lanes | Traffic Intensity: {CONFIG.TRAFFIC_INTENSITY}\n"
-        f"  Hyperparams:  Episodes={episodes} | α={CONFIG.ALPHA} | γ={CONFIG.GAMMA}\n"
-        f"  Exploration:  ε-Start={CONFIG.EPS_START} | ε-Decay={CONFIG.EPS_DECAY} | ε-Min={CONFIG.EPS_MIN}\n"
-        f"  Simulation:   Duration={CONFIG.NUM_SECONDS}s | Control Step={CONFIG.DELTA_TIME}s\n"
-        f"============================================================"
+        f"Training config: {config_name}\n"
+        f"Lanes: {CONFIG.NUM_LANES} | Traffic intensity: {CONFIG.TRAFFIC_INTENSITY}\n"
+        f"Episodes: {episodes} | Alpha: {CONFIG.ALPHA} | Gamma: {CONFIG.GAMMA}\n"
+        f"Epsilon start: {CONFIG.EPS_START} | Epsilon decay: {CONFIG.EPS_DECAY} | Epsilon min: {CONFIG.EPS_MIN}\n"
     )
 
     for ep in range(1, episodes + 1):
@@ -81,7 +65,6 @@ def run_training(config_name: str, episodes: int, seed: int):
         terminated = truncated = False
         step_count = 0
 
-        # Step telemetry accumulator
         step_telemetry = []
 
         while not (terminated or truncated):
@@ -89,9 +72,9 @@ def run_training(config_name: str, episodes: int, seed: int):
             next_obs, reward, terminated, truncated, info = env.step(action)
             next_state = discretize_state(next_obs)
 
+            # update Q-table
             bellman_update(q_table, state, action, reward, next_state, n_actions)
 
-            # Record step telemetry
             step_telemetry.append(
                 {
                     "step": step_count,
@@ -110,28 +93,28 @@ def run_training(config_name: str, episodes: int, seed: int):
             ep_reward += reward
             step_count += 1
 
-        # Decay epsilon
+        # decay epsilon
         epsilon = max(CONFIG.EPS_MIN, epsilon * CONFIG.EPS_DECAY)
 
-        # 1. Save step telemetry for this episode
+        # save step telemetry for this episode
         ep_df = pd.DataFrame(step_telemetry)
         ep_file_path = os.path.join(CONFIG.DATA_DIR, f"{config_name}_ep_{ep}.csv")
         ep_df.to_csv(ep_file_path, index=False)
 
-        # Save Q-table for this specific episode to enable "Visualize at Any Time" in demo
+        # save Q-table for this specific episode to enable playbacks at any episode in demo
         qtable_ep_path = os.path.join(
             CONFIG.MODELS_DIR, f"q_table_{config_name}_ep_{ep}.npy"
         )
         np.save(qtable_ep_path, np.array(q_table, dtype=object))
 
-        # Calculate metrics for the episode
+        # metrics for the episode
         ep_stopped = [row["total_stopped"] for row in step_telemetry]
         ep_wait = [row["mean_waiting_time"] for row in step_telemetry]
         avg_q = sum(ep_stopped) / len(ep_stopped) if ep_stopped else 0
         max_q = max(ep_stopped) if ep_stopped else 0
         avg_w = sum(ep_wait) / len(ep_wait) if ep_wait else 0
 
-        # Save to summary data
+        # save to summary data
         episode_summary_data.append(
             {
                 "episode": ep,
@@ -145,31 +128,26 @@ def run_training(config_name: str, episodes: int, seed: int):
         )
 
         print(
-            f"  Ep {ep:3d}/{episodes} | "
+            f"Episode {ep:3d}/{episodes} | "
             f"Reward: {ep_reward:9.2f} | "
-            f"Avg Queue: {avg_q:5.2f} | "
-            f"Avg Wait: {avg_w:5.2f}s | "
-            f"ε: {epsilon:.2f} | "
-            f"Q-states: {len(q_table)}"
+            f"Avg queue: {avg_q:5.2f} | "
+            f"Avg wait: {avg_w:5.2f}s | "
+            f"Epsilon: {epsilon:.2f} | "
+            f"States: {len(q_table)}"
         )
 
     env.close()
 
-    # 2. Save overall summary for comparative analysis
+    # save overall summary
     summary_df = pd.DataFrame(episode_summary_data)
     summary_file_path = os.path.join(CONFIG.DATA_DIR, f"{config_name}_summary.csv")
     summary_df.to_csv(summary_file_path, index=False)
-    print(f"\n  [✔] Saved episode summary telemetry → {summary_file_path}")
+    print(f"Saved episode summary telemetry to {summary_file_path}")
 
-    # 3. Export the trained Q-table
+    # export the trained Q-table
     qtable_path = os.path.join(CONFIG.MODELS_DIR, f"q_table_{config_name}.npy")
     np.save(qtable_path, np.array(q_table, dtype=object))
-    print(f"  [✔] Saved trained model matrix → {qtable_path} ({len(q_table)} states)")
-
-
-# ---------------------------------------------------------------------------
-# 3. ENTRY POINT
-# ---------------------------------------------------------------------------
+    print(f"Saved trained model matrix to {qtable_path} ({len(q_table)} states)")
 
 
 def main():
