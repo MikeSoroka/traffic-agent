@@ -615,8 +615,8 @@ def generate_true_policy_matrix_heatmaps(config_name: str, label: str, save: boo
         print("  [!] Loaded Q-table is empty.")
         return
 
-    value_matrix = np.full((4, 4), np.nan)
-    policy_matrix = np.full((4, 4), np.nan)
+    value_matrix = np.zeros((4, 4))
+    policy_matrix = np.zeros((4, 4))
 
     for row in range(4):  # North Bin (y-axis)
         for col in range(4):  # East Bin (x-axis)
@@ -637,6 +637,10 @@ def generate_true_policy_matrix_heatmaps(config_name: str, label: str, save: boo
         fontsize=11,
         fontweight="bold",
     )
+
+    # Disable background grids explicitly
+    axes[0].grid(False)
+    axes[1].grid(False)
 
     # 1. Left Panel - Value Matrix Heatmap
     sns.heatmap(
