@@ -16,8 +16,8 @@
 % https://www.overleaf.com/learn/latex/Questions/Which_OTF_or_TTF_fonts_are_supported_via_fontspec
 \setmainfont{Times New Roman}
 \setsansfont{Arial}  % Calibri
-\setmonofont{Courier New}
-\setmathfont{XITS Math}
+\setmonofont[Scale=MatchLowercase]{Liberation Mono}
+\setmathfont{STIX Two Math}
 
 % spacing 1, 1.5, or 1.15
 % \singlespacing
@@ -87,8 +87,8 @@
 \titlespacing{\subsubsubsection}{\parindent}{10pt}{10pt}
 
 % each section starts from new line
-\newcommand{\sectionbreak}{\clearpage}
-\preto{\section}{\clearpage}
+%\newcommand{\sectionbreak}{\clearpage}
+%\preto{\section}{\clearpage}
 
 % page numbering
 \pagestyle{fancy}  % turn on the style

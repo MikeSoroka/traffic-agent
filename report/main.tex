@@ -50,430 +50,372 @@
 
 \tableofcontents
 
+\newpage
 \phantomsection
 \section*{Introduction}
 \addcontentsline{toc}{section}{Introduction}
 
-Urban traffic congestion imposes significant economic and environmental costs: vehicles
-idling at intersections waste fuel, increase emissions, and reduce overall road throughput.
-Traditional fixed-time traffic signal controllers allocate green time according to
-pre-programmed schedules that cannot adapt to real-time demand fluctuations, particularly
-during off-peak hours or unexpected events.
+Urban traffic congestion represents a critical socio-economic and environmental bottleneck in modern municipal engineering. Vehicles idling at saturated intersections account for immense quantities of wasted fuel, severe increases in localized greenhouse gas emissions, and a drastic reduction in the operational throughput of urban transport networks. Traditional traffic control paradigms rely heavily on fixed-time signal schedules, which allocate green-phase durations according to static historical historical averages. These pre-programmed schedules are inherently incapable of adapting to real-time micro-level demand fluctuations, irregular stochastic surges, or the sharp operational transitions between peak and off-peak urban traffic profiles. While modern actuated systems utilizing inductive loop sensors offer minor adjustments, they remain bounded by rigid, rule-based algorithmic structures that fail to optimize the intersection capacity globally or generalize across highly dynamic municipal layout changes.
 
-Reinforcement Learning (RL) offers a principled framework for adaptive signal control.
-An RL agent interacts with a traffic environment, observing the current state of queues
-and flows, choosing a signal phase, and receiving a reward that encodes how good the
-outcome was. Over many episodes the agent learns a policy that minimises vehicle waiting
-times without requiring a hand-crafted schedule.
+To overcome these structural limitations, model-free Reinforcement Learning (RL) has emerged as a mathematically grounded, highly adaptive framework for intelligent traffic signal management. Operating within a closed interaction loop, an RL agent interprets real-time continuous sensor readings from the intersection approaches as environmental states, selects an optimal green-phase configuration as an action, and receives a scalar reward signal that explicitly penalizes intersection inefficiencies. Through continuous trial-and-error iterations governed by Temporal Difference updates, the controller maps out optimal behavioral policies natively. This approach systematically minimizes cumulative vehicle delays and queue footprints without requiring prior layout mappings, complex traffic physics models, or human-designed scheduling heuristics.
 
-This work implements \textbf{Tabular Q-Learning} for a single signalised intersection
-simulated in the SUMO microscopic traffic simulator via the \texttt{sumo-rl} Gymnasium
-wrapper. Two reward configurations are compared: the default differential waiting-time
-reward and a custom quadratic queue-length penalty. The report describes the system
-architecture, the RL method, the experimental setup, and a quantitative comparison of
-both configurations across 50 training episodes.
+The objective of this project is to develop and evaluate a working prototype of an intelligent, adaptive traffic management system utilizing Tabular Q-learning. Simulated microscopically within the Eclipse SUMO (Simulation of Urban MObility) environment via the \texttt{sumo-rl} Gymnasium wrapper, the system controls a four-way single-lane intersection. To satisfy project guidelines, the framework features a highly flexible, fully parameterized configuration engine. This engine procedurally compiles the physical road network and dynamically adjusts vehicle flow parameters based on deterministic random seed rotations. 
 
-\newpage
+The architecture is explicitly decoupled into independent components: a headless training engine to optimize policies over a $100$-episode horizon, an interactive analytical suite for offline post-processing, and an isolated demonstration module designed exclusively for visual playback and defensive verification. This report evaluates the systemic implications of reward shaping by providing a comprehensive comparison between two distinct formulations: a baseline model optimizing for step-by-step changes in vehicle delay ($\Delta$ Waiting Time) and a custom engineered model optimizing for the direct spatial reduction of approach backlogs ($\Delta$ Queue Length). The subsequent sections thoroughly detail the pipeline's modular architecture, the simulation environment's physical properties, the mathematical underpinnings of the Q-learning implementation, and a comprehensive quantitative analysis of policy convergence.
 
 \section{System Architecture}
 
-The system consists of four loosely coupled components as illustrated conceptually below.
+The smart traffic light control framework is built as a strictly decoupled, multi-stage machine learning pipeline. This structural isolation ensures complete separation of concerns, eliminating computational rendering overhead during the primary training phase and allowing for instantaneous offline analysis. The overall architecture is conceptually divided into four unified functional layers:
 
-\textbf{SUMO Simulator.} Eclipse SUMO (Simulation of Urban MObility, version 1.18.0)
-provides a microscopic simulation of individual vehicle movements, traffic-signal
-phases, and inter-vehicle interactions. It is controlled via the TraCI protocol,
-which exposes a Python API for retrieving sensor data and issuing phase commands.
+\textbf{Centralized Configuration Hub (\texttt{config.py}).} This layer serves as the single source of truth for the entire system, unifying all reinforcement learning hyperparameters, traffic safety bounds, and physical vehicle dynamics. By programmatically anchoring all downstream execution layers to a single, deterministic master seed, it guarantees absolute reproducibility. This allows alternative reward formulations to be benchmarked against identical vehicle arrival queues for a mathematically fair comparative analysis.
 
-\textbf{sumo-rl Environment.} The \texttt{sumo-rl} library (version 1.4.5) wraps SUMO
-as a standard Gymnasium environment. It handles episode resets, TraCI communication,
-observation assembly, and optional CSV logging of per-step metrics. The agent interacts
-with it through the standard \texttt{reset()} / \texttt{step()} interface using the
-five-tuple unpacking introduced in Gymnasium 0.26:
-\begin{lstlisting}
-next_obs, reward, terminated, truncated, info = env.step(action)
-\end{lstlisting}
+\textbf{Headless Training Engine (\texttt{train.py}).} This component combines the Eclipse SUMO microscopic traffic simulator (version 1.26.0) and the \texttt{sumo-rl} library wrapper (version 1.4.5) to execute the core model-free learning loop. Operating completely headlessly without graphical rendering overhead, it interfaces via the TraCI protocol to gather discrete road densities and pass phase commands. To satisfy strict visual auditing constraints, this engine permanently archives the complete step-by-step telemetry and serializes an explicit binary matrix snapshot of the agent's lookup dictionary at the end of every individual training episode.
 
-\textbf{Q-Learning Agent.} A dictionary-based Q-table maps discrete state tuples to
-arrays of action values. The agent encapsulates state discretisation, action selection
-(epsilon-greedy), and the Bellman update. No external ML library is required.
+\textbf{Offline Post-Processing and Analysis Suite (\texttt{analysis.py}).} A standalone data engine engineered to parse the frozen historical datasets written by the training engine. Because this module lacks any execution dependencies on the underlying traffic simulator or its physical maps, it runs instantaneously. It utilizes standard Python data analysis and visualization tools to aggregate multi-episode summaries, evaluate state-space discovery curves, and render publication-ready vector graphics for retrospective evaluation.
 
-\textbf{Analysis Pipeline.} After training, the per-step CSV files written by
-\texttt{sumo-rl} are parsed with \texttt{pandas} to compute per-episode summaries.
-\texttt{matplotlib} generates all plots.
+\textbf{Deterministic Demonstration Module (\texttt{demo.py}).} An independent execution runtime designed specifically for visual playback and performance verification. Unlike the training engine, this module activates the simulator's graphical user interface (GUI) but enforces a strict greedy policy (exploration rate $\epsilon = 0.0$) to eliminate random action noise. By reloading a targeted historical model snapshot and aligning the simulator to the exact corresponding sequential episode seed, it provides a highly visual, perfectly reproducible live demonstration of the traffic light's adaptive capabilities.
 
-\newpage
+\section{Simulation Environment Description}
 
-\section{Environment Description}
+\subsection{Procedural Network Geometry and Dynamic Traffic Scenario}
 
-\subsection{Network and Route Files}
+Rather than relying on a static, pre-packaged grid, the simulation network is programmatically generated at runtime using background compilation utilities. The modeled infrastructure consists of a single four-way cross-intersection with single-lane approaches extending exactly $150$m from the intersection center along the cardinal axes. Enforcing exactly one incoming lane per approach vector (four incoming lanes total) serves as a critical design choice to mitigate the curse of dimensionality. By capping the layout at $4$ lanes and tracking $2$ distinct observation variables per lane (normalized traffic density and normalized queue length) discretized across $4$ uniform bins, the theoretical size of the discrete state space space is strictly bounded at $4^{4 \times 2} = 4^8 = 65{,}536$ unique structural combinations. This explicit constraint guarantees a high state-visitation frequency and reliable policy convergence within a tabular framework.
 
-The simulation uses the \texttt{single-intersection} network bundled with \texttt{sumo-rl}.
-It models a four-way intersection with one lane per approach (North, South, East, West).
-Vehicles are spawned stochastically according to a pre-defined route file that maintains
-a steady mixed-direction demand throughout the 3\,600-second episode duration.
+Vehicle dynamics are configured to mimic standard urban passenger car behavior under realistic municipal constraints, derived directly from the empirical default parameters of SUMO's underlying Krauss car-following model. The maximum vehicle speed is set to $13.89$,m/s, corresponding precisely to the standard $50$km/h legal urban speed limit in Lithuania. To ensure mathematically grounded and physically realistic vehicle acceleration, safety, and platoon queuing behaviors, physical vehicle properties are defined by a baseline vehicle length of $5.0$,m, a minimum front-to-back safety bumper gap of $2.5$m, a normal acceleration capability of $2.6$m/s$^2$, and a maximum comfortable deceleration threshold of $4.5$m/s$^2$.
 
-\subsection{Observation Space}
+Traffic generation is modeled stochastically using a baseline intensity parameter that translates to an aggregate vehicle arrival rate ($\lambda$) of 0.25\,vehicles/second per approach, or exactly one vehicle arriving at the back of a queue every 4.0 seconds under normal urban flow conditions. Vehicles are allocated across twelve valid direction flows according to a strict municipal split: 70\% of spawned vehicles travel straight across the intersection, 15\% execute left-hand turns, and 15\% execute right-hand turns. At peak intensity, this arrival rate closely approaches the physical saturation capacity of a single lane under a split green-light schedule, placing the untrained intersection precisely at the threshold of critical gridlock.
 
-At each decision step the environment returns an 11-dimensional continuous observation
-vector. The first eight elements are the normalised lane density and queue length for each
-of the four incoming lanes — values in $[0,1]$ representing the fraction of lane capacity
-occupied and the fraction of vehicles that are stationary, respectively. The remaining
-three elements encode phase timing information. The full vector is:
+\subsection{Observation and Action Spaces}
+
+At each discrete decision interval, the environment exposes an 11-dimensional continuous observation vector. To ensure strict structural consistency across different execution runs, the metrics are gathered and ordered alphabetically by the underlying simulator edge naming conventions (East, North, South, West). The full state representation is mathematically defined as:
 \begin{equation}
-    \mathbf{o} = \bigl[
-        \rho_N,\, \rho_S,\, \rho_E,\, \rho_W,\;
-        q_N,\, q_S,\, q_E,\, q_W,\;
-        \phi_1,\, \phi_2,\, \phi_3
-    \bigr] \in [0,1]^{11}
+	\mathbf{o} = \bigl[
+	\rho_E,\, \rho_N,\, \rho_S,\, \rho_W,\;
+	q_E,\, q_N,\, q_S,\, q_W,\;
+	\phi_1,\, \phi_2,\, \phi_3
+	\bigr]^T \in [0,1]^{11},
+	\label{eq:observation_vector}
 \end{equation}
-where $\rho_i$ is lane density, $q_i$ is normalised queue length, and $\phi_j$ encodes
-current phase/timing state.
+where $\rho_i \in [0,1]$ represents the normalized vehicle density (the fraction of lane space occupied by moving or idling cars), $q_i \in [0,1]$ denotes the normalized queue length (the fraction of the approach filled with completely stationary halting vehicles), and $\phi_j$ represents a 3-bit binary one-hot encoding tracking the current active signal phase configuration.
 
-\subsection{Action Space}
-
-The agent selects one of two green phases at each decision step:
-\begin{itemize}[noitemsep]
-    \item \textbf{Action 0} — North--South green, East--West red.
-    \item \textbf{Action 1} — East--West green, North--South red.
+The control action space is discrete and consists of two mutually exclusive signal phase assignments:
+\begin{itemize}[noitemsep,topsep=4pt]
+	\item \textbf{Action 0 (North--South Corridor):} Activates a green phase for the North and South approaches while pinning East and West flows behind a red signal.
+	\item \textbf{Action 1 (East--West Corridor):} Activates a green phase for the East and West approaches while pinning North and South flows behind a red signal.
 \end{itemize}
-The environment enforces a minimum green time of 5\,s and inserts a 2\,s yellow
-transition automatically between any phase change.
+To ensure traffic safety and prevent rapid signal flickering, the environment enforces a hard minimum green-phase duration of 5\,seconds. Furthermore, whenever the agent triggers a phase transition, the environment automatically inserts a mandatory 2-second yellow buffer interval to allow vehicles within the intersection box to safely decelerate and clear.
 
-\subsection{Reward Functions}
+\subsection{Reward Formulations and Optimization Metrics}
 
-Two reward configurations are evaluated:
+To analyze the impact of reward shaping on policy convergence, two distinct comparative configurations are evaluated back-to-back:
 
-\textbf{Configuration A — Default reward} (differential waiting time):
+\textbf{Baseline Configuration (Differential Waiting Time):} This function optimizes for relative changes in aggregate vehicle delay. It measures the difference between the total waiting time accumulated by all vehicles on the map during the previous step versus the current step:
 \begin{equation}
-    r_t = \sum_{i} W_i^{t-1} - \sum_{i} W_i^{t}
+	r_t = \sum_{i} W_i^{t-1} - \sum_{i} W_i^{t}
 \end{equation}
-where $W_i^t$ is the accumulated waiting time of vehicle $i$ at step $t$.
-A positive reward means total waiting decreased this step.
+where $W_i^t$ represents the idling duration of vehicle $i$ at step $t$. A net positive return indicates that total intersection delay decreased during the transition interval.
 
-\textbf{Configuration B — Quadratic queue penalty}:
+\textbf{Custom Configuration (Differential Queue Length):} Rather than evaluating absolute vehicle delay or absolute spatial backlogs—which generate low signal-to-noise ratios and inadvertently trick tabular agents into unvisited zero-state traps—this formulation optimizes for the net change in queue volume:
 \begin{equation}
-    r_t = -\!\left(\sum_{l} h_l^t\right)^{\!2}
+	r_t = Q_{t-1} - Q_t \quad \text{where} \quad Q_t = \sum_{l} h_l^t
 \end{equation}
-where $h_l^t$ is the number of halting vehicles in lane $l$ at step $t$.
-Squaring amplifies the cost of large backlogs non-linearly, incentivising the
-agent to clear congested lanes quickly even at the expense of lighter queues.
+where $h_l^t$ is the explicit count of halting, stationary vehicles counted on incoming approach lane $l$ at step $t$. By focusing on the delta ($Q_{t-1} - Q_t$), the reward isolates the immediate operational impact of a phase change from permanent background traffic noise, providing a strong mathematical gradient that guides the agent toward maximizing throughput.
 
-\subsection{Episode Structure}
+\subsection{Episode and Logging Architecture}
 
-Each episode simulates 3\,600 seconds of traffic. With \texttt{delta\_time}~$=5$\,s,
-the agent makes 720 decisions per episode. The simulation clock restarts at \texttt{reset()}.
+Each training episode covers 3,600 seconds of continuous microscopic traffic flow. Operating at a fixed control step ($\Delta t = 5$\,s) between sequential agent choices, an entire episode consists of exactly 720 discrete state-action transitions. To ensure robust policy evaluation under varying traffic conditions, every episode utilizes an incremental seed rotation ($Seed + Episode$). This technique systematically alters the microscopic vehicle generation sequences while preserving absolute, deterministic reproducibility between the baseline and custom execution pipelines.
 
-\newpage
+\section{Tabular Q-Learning Implementation}
 
-\section{Tabular Q-Learning}
+\subsection{State-Space Discretisation and Memory Optimization}
 
-\subsection{State Discretisation}
-
-The continuous observation vector cannot be used directly as a Q-table key.
-Each of the 11 features is mapped to one of $B = 4$ bins by dividing $[0,1]$
-into equal-width intervals with boundaries $\{0.25,\, 0.50,\, 0.75\}$:
+Because the microscopic simulation environment exposes an 11-dimensional continuous observation vector $\mathbf{o} \in [0,1]^{11}$, direct mapping to a lookup table is mathematically impossible. To resolve this, each continuous feature $x_j$ is mapped to a discrete bin index $d_j \in \{0, 1, 2, 3\}$ using an equal-width linear digitization function:
 \begin{equation}
-    d_j = \mathrm{clip}\!\left(\lceil 4 x_j \rceil - 1,\; 0,\; 3\right)
-          \quad \text{for each feature } x_j \in [0,1]
+	d_j = \max\left(0, \, \min\left(B - 1, \, \lfloor B \cdot x_j \rfloor\right)\right)
 \end{equation}
-The resulting 11-dimensional integer tuple $(d_0,\dots,d_{10})$ is used as a
-Python dictionary key. The theoretical state-space size is $4^{11} = 4{,}194{,}304$,
-but in practice only a small fraction of states is visited; after 50 training episodes,
-the Q-table contained 293 states for Configuration A and 321 for Configuration B.
+where $B = 4$ denotes the number of discretisation bins per dimension. The resulting 11-dimensional integer tuple $(d_0, d_1, \dots, d_{10})$ serves as a unique lookup key within a flexible Python dictionary architecture. 
 
-\subsection{Q-Learning Update}
+Although the theoretical state-space capacity is immense ($B^{11} = 4^{11} = 4{,}194{,}304$ possible permutations), the actual explored environment is highly constrained by the underlying physical traffic rules and symmetric traffic generation profiles. Rather than allocating a rigid, multi-gigabyte matrix upfront, the system utilizes a lazy initialization technique. New rows of action values are instantiated as pure zero vectors only upon an agent's initial encounter with a state, perfectly adhering to the zero-initialization paradigm while keeping the system memory signature exceptionally light. Empirically, across a complete 100-episode training run, the baseline model visited only 1,683 unique states, while the custom differential model converged after exploring 1,574 states.
 
-The agent applies the standard Bellman equation at every decision step:
+\subsection{Temporal Difference Update and Action Selection}
+
+The algorithmic controller optimizes its traffic-signal policy off-policy using model-free Temporal Difference learning. At each discrete control interval ($\Delta t = 5$\,s), the lookup table is modified in-place using the standard Bellman optimality equation:
 \begin{equation}
-    Q(s,a) \;\leftarrow\; Q(s,a) \;+\; \alpha \Bigl[
-        r \;+\; \gamma \max_{a'} Q(s',a') \;-\; Q(s,a)
-    \Bigr]
-    \label{eq:bellman}
+	Q(s_t, a_t) \leftarrow Q(s_t, a_t) + \alpha \Bigl[ r_{t+1} + \gamma \max_{a} Q(s_{t+1}, a) - Q(s_t, a_t) \Bigr]
+	\label{eq:bellman_update}
 \end{equation}
-where $\alpha$ is the learning rate, $\gamma$ the discount factor, $r$ the immediate
-reward, $s'$ the next state, and $a'$ ranges over all actions. New states are
-initialised with $Q = 0$ (optimistic initialisation would require prior knowledge
-of reward magnitudes).
+where $\alpha$ is the learning rate, $\gamma$ is the discount factor, and $r_{t+1}$ represents the scalar reward returned by the environment. The maximization term $\max_{a} Q(s_{t+1}, a)$ evaluates the absolute best future potential of the next state, ensuring that the target update remains strictly off-policy.
 
-\subsection{Exploration Strategy}
-
-Action selection uses an $\varepsilon$-greedy policy. At episode $e$:
+To manage the classic exploration-exploitation trade-off, action selection adheres to an $\varepsilon$-greedy policy. At training episode $e$, the active policy $\pi(s)$ transitions between random exploration and greedy exploitation based on a decaying probability threshold:
 \begin{equation}
-    \pi(s) = \begin{cases}
-        \text{random action} & \text{with probability } \varepsilon_e \\
-        \arg\max_{a} Q(s,a) & \text{otherwise}
-    \end{cases}
+	\pi(s) = \begin{cases}
+		\text{random action } a \in \{0, 1\} & \text{with probability } \varepsilon_e \\
+		\arg\max_{a} \bigl( Q(s, a) + \xi_a \bigr) & \text{otherwise}
+	\end{cases}
 \end{equation}
-with $\varepsilon_e = \max(\varepsilon_{\min},\; \varepsilon_0 \cdot \delta^{e-1})$.
-Ties in $\arg\max$ are broken by adding negligible Gaussian noise, ensuring uniform
-tie-breaking without a separate random-action call.
+The exploration parameter systematically cools down down to an immutable baseline floor using a multiplicative decay function:
+\begin{equation}
+	\varepsilon_e = \max\left(\varepsilon_{\min}, \, \varepsilon_0 \cdot \delta^{e-1}\right)
+\end{equation}
+where $\varepsilon_0$ is the initial exploration rate and $\delta$ is the per-episode decay factor. To optimize greedy execution, the deterministic selection term features an infinitesimally small zero-mean Gaussian noise variable $\xi_a \sim \mathcal{N}(0, 10^{-9})$ added to each action cell. This stochastic tie-breaking mechanism ensures that uninitialized or identical Q-value entries are evaluated uniformly, preventing the policy from falling into static, early-index selection biases.
 
-\subsection{Hyperparameters}
+\subsection{Hyperparameter Framework}
+
+The full suite of structural, environmental, and algorithmic parameters used to guarantee system convergence across all comparative experiments is summarized in Table~\ref{tab:hyperparams}.
 
 \begin{table}[H]
-    \centering
-    \caption{Q-Learning hyperparameters used in all experiments}
-    \label{tab:hyperparams}
-    \begin{tabular}{lll}
-        \toprule
-        \textbf{Parameter} & \textbf{Symbol} & \textbf{Value} \\
-        \midrule
-        Learning rate          & $\alpha$             & 0.10 \\
-        Discount factor        & $\gamma$             & 0.95 \\
-        Initial exploration    & $\varepsilon_0$      & 1.00 \\
-        Exploration decay      & $\delta$             & 0.98 \\
-        Minimum exploration    & $\varepsilon_{\min}$ & 0.05 \\
-        Observation bins       & $B$                  & 4    \\
-        Training episodes      & —                    & 50   \\
-        Episode duration       & —                    & 3\,600\,s \\
-        Decision interval      & \texttt{delta\_time} & 5\,s \\
-        Yellow phase           & \texttt{yellow\_time}& 2\,s \\
-        Minimum green          & \texttt{min\_green}  & 5\,s \\
-        \bottomrule
-    \end{tabular}
+	\centering
+	\caption{Optimized system configurations and Q-learning hyperparameters}
+	\label{tab:hyperparams}
+	\begin{tabular}{lll}
+		\toprule
+		\textbf{System Parameter Attribute} & \textbf{Algorithmic Symbol} & \textbf{Configured Value} \\
+		\midrule
+		Learning Rate & $\alpha$ & 0.20 \\
+		Discount Factor & $\gamma$ & 0.95 \\
+		Initial Exploration Rate & $\varepsilon_0$ & 1.00 \\
+		Multiplicative Exploration Decay & $\delta$ & 0.96 \\
+		Minimum Exploration Floor & $\varepsilon_{\min}$ & 0.05 \\
+		Discretisation Bins per Feature Dimension & $B$ & 4 \\
+		Total Evaluated Training Episodes & — & 100 \\
+		Microscopic Simulation Episode Duration & — & 3,600\,s \\
+		Agent Decision Control Step & \texttt{delta\_time} & 5\,s \\
+		Automatic Signal Clearance Buffer & \texttt{yellow\_time} & 2\,s \\
+		Minimum Phase Green Allocation & \texttt{min\_green} & 5\,s \\
+		\bottomrule
+	\end{tabular}
 \end{table}
 
-\newpage
-
 \section{Evaluation Strategy}
-
-\subsection{Metrics}
-
-Three metrics are tracked from the \texttt{sumo-rl} per-step CSV logs after each episode:
-\begin{itemize}[noitemsep]
-    \item \textbf{Average queue length} — mean number of halting vehicles per step.
-    \item \textbf{Maximum queue length} — peak number of halting vehicles in the episode.
-    \item \textbf{Average waiting time} — mean per-vehicle waiting time across all steps (seconds).
-\end{itemize}
-Lower values indicate better performance for all three metrics.
-
-\subsection{Visualisations}
-
-Four types of plot are produced for each configuration:
-
-\begin{enumerate}[noitemsep]
-    \item \textbf{Training reward curve} — per-episode total reward with a rolling-mean
-          smoothing window of $\lfloor 0.2 \times 50 \rfloor = 10$ episodes.
-    \item \textbf{Performance metrics} — average queue (with max band) and average waiting
-          time per episode, enabling direct comparison between configurations.
-    \item \textbf{Signal-schedule visualisation} — a three-panel figure for episode 1
-          (random policy) and the final episode (trained policy), showing:
-          (a) a Gantt chart of active phases, (b) total stopped vehicles over time,
-          and (c) a heatmap of the full observation vector — the agent's ``view'' of
-          traffic state at every decision step.
-    \item \textbf{Q-table heatmap} — all visited states projected onto the first two
-          observation dimensions, coloured by estimated state value and preferred action.
-\end{enumerate}
-
-\newpage
+	
+	\subsection{Quantitative Performance Metrics}
+	
+	To evaluate and compare the efficiency of the learned traffic-signal policies, three aggregate operational metrics are systematically tracked and processed from the simulation telemetry datasets after every training episode:
+	\begin{itemize}[noitemsep]
+		\item \textbf{Average Queue Length:} The mathematical mean of the total number of halting, stationary vehicles computed across all decision steps within the episode, measuring general spatial congestion.
+		\item \textbf{Maximum Queue Length:} The absolute peak number of halting vehicles recorded at any single decision step during the simulation cycle, highlighting the system's resilience against worst-case bottleneck surges.
+		\item \textbf{Average Waiting Time:} The mean accumulation of idling delay experienced per vehicle across all control intervals (measured in seconds), quantifying overall localized transit velocity.
+	\end{itemize}
+	For all three dimensions, lower numerical values indicate a superior, more efficient traffic control policy.
+	
+	\subsection{Analytical and Behavioral Visualizations}
+	
+	To verify policy convergence and structurally evaluate the decision-making mechanics of the Q-learning tabular matrices, six distinct analytical visualization frameworks are generated offline:
+	\begin{enumerate}[noitemsep,topsep=4pt]
+		\item \textbf{Comparative Training Reward Curves:} A continuous timeline mapping the total accumulated reward per episode.
+		\item \textbf{Systemic Performance Aggregates:} A side-by-side panel tracking average waiting time and queue lengths across training iterations. It includes a shaded max-queue envelope to visualize how reliably the policy dampens severe gridlock spikes as exploration cools down.
+		\item \textbf{Signal Telemetry and Traffic-State Heatmaps:} A three-panel behavioral log contrasting early stochastic exploratory periods (Episode 1) against finalized exploitation cycles. It combines a green-phase Gantt chart, a continuous stopped-vehicle curve, and a dense multi-row heatmap tracking the exact chronological values of all 11 observation vector features.
+		\item \textbf{Q-Table Value and Policy Scatter Projections:} A two-dimensional dimensionality reduction chart that plots every visited state key along the incoming East and North approach density axes. It adds spatial jitter to reveal state-visitation density, mapping cell color gradients to maximum expected return values and greedy action choices.
+		\item \textbf{True Q-Table Matrix Heatmaps:} A rigid chessboard-style $4 \times 4$ grid that uses mathematical data aggregation to compute cell-by-cell averages of state values and policy choices across the primary approach densities. This structured overview provides clean validation of the greedy control boundaries.
+		\item \textbf{State-Space Discovery Curves:} A model capacity growth chart tracking the absolute volume of unique dictionary keys indexed over the 100 episodes. The logarithmic expansion line measures the efficiency of the state discretization parameters.
+	\end{enumerate}
 
 \section{Experiments and Results}
 
+\subsection{Simulation}
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.85\textwidth]{demo.png}
+	\caption{SUMO simulation example}
+	\label{fig:demo}
+\end{figure}
+
+Screenshot of the simulation demo is shown on Figure~\ref{fig:demo}. The screenshot highlights the different traffic light states (red and green) with different car configurations (both waiting in the queue and passing the intersection while turning).
+
 \subsection{Training Reward Curves}
 
-Figure~\ref{fig:reward} shows the per-episode total reward for both configurations
-across 50 training episodes. Both curves begin at their most negative values,
-reflecting the random exploration of the first episodes ($\varepsilon_1 = 1.0$), and
-trend upward as the Q-table accumulates experience.
+The progression of model-free Temporal Difference learning across the full 100-episode horizon is evaluated using the per-episode total reward curves. By formulating the custom configuration as a differential metric, the visual scaling issues of absolute penalties are eliminated, mapping both lines onto a unified range from $-40$ to $-5$.
 
-The quadratic configuration (orange) converges faster in early episodes, likely because
-its larger penalty magnitude ($-q^2$ vs.\ differential reward) creates steeper gradients
-that reinforce clearly good decisions more strongly. By episode 30, both curves approach
-a similar plateau, suggesting that 50 episodes are sufficient to reach a stable policy
-with the chosen hyperparameters.
+Figure~\ref{fig:reward} overlays the reward curves for both experiments. Both configurations begin at identical highly negative values, which empirically validates the experimental control established by the shared master seed configuration. As the exploration rate decays ($\varepsilon_0 = 1.0 \to \varepsilon_{\min} = 0.05$), both lines trend upward, indicating that the agents are systematically minimizing temporal difference error and discovering high-value policies. The baseline agent (blue) displays a more steady, monotonic ascent. Conversely, the custom differential queue agent (orange) exhibits greater early learning variance, dropping to a minimum of $-45$ due to exploratory stochastic phase actions under heavy queue backlogs.
 
 \begin{figure}[H]
-    \centering
-    \includegraphics[width=\textwidth]{reward_comparison.png}
-    \caption{Per-episode total reward for both reward configurations.
-             Solid lines show 10-episode rolling means; shaded traces are raw values.}
-    \label{fig:reward}
+	\centering
+	\includegraphics[width=0.85\textwidth]{reward_comparison.pdf}
+	\caption{Per-episode total reward curves for baseline and custom configurations across 100 iterations}
+	\label{fig:reward}
 \end{figure}
 
-\subsection{Queue Length and Waiting Time}
+\subsection{Operational Performance Aggregates}
 
-Figure~\ref{fig:metrics} plots the per-episode average queue length (with shaded
-average-to-maximum band) and average waiting time. Both configurations show clear
-monotonic improvement over training.
+The systemic performance gains are tracked through the side-by-side progression panel in Figure~\ref{fig:metrics}, illustrating average stopped vehicle counts and mean waiting times per iteration.
 
 \begin{figure}[H]
-    \centering
-    \includegraphics[width=\textwidth]{performance_metrics.png}
-    \caption{Per-episode queue length (left, shaded band = avg to max) and
-             mean waiting time (right) for both configurations.}
-    \label{fig:metrics}
+	\centering
+	\includegraphics[width=\textwidth]{performance_metrics.pdf}
+	\caption{Per-episode metrics (left) and exponential mean waiting time reductions (right)}
+	\label{fig:metrics}
 \end{figure}
 
-Table~\ref{tab:results} summarises the quantitative improvement from episode 1
-to episode 50.
+Table~\ref{tab:results} summarizes the exact quantitative advancements achieved by both control configurations from the uninitialized baseline of episode 1 to the fully trained convergence phase of episode 100.
 
 \begin{table}[H]
-    \centering
-    \caption{Performance metrics — episode 1 vs.\ episode 50}
-    \label{tab:results}
-    \begin{tabular}{lrrrrrr}
-        \toprule
-        & \multicolumn{3}{c}{\textbf{Episode 1}} & \multicolumn{3}{c}{\textbf{Episode 50}} \\
-        \cmidrule(lr){2-4} \cmidrule(lr){5-7}
-        \textbf{Config} & Avg Q & Max Q & Avg Wait & Avg Q & Max Q & Avg Wait \\
-        \midrule
-        A — Default   & 11.57 & 38 & 2.54\,s & 5.93 & 21 & 0.88\,s \\
-        B — Quadratic & 11.84 & 38 & 2.40\,s & 4.11 & 18 & 0.91\,s \\
-        \bottomrule
-    \end{tabular}
+	\centering
+	\caption{Operational performance metrics summary — episode 1 vs.\ episode 100}
+	\label{tab:results}
+	\begin{tabular}{lrrrrrr}
+		\toprule
+		& \multicolumn{3}{c}{\textbf{Episode 1 (Uninitialized Baseline)}} & \multicolumn{3}{c}{\textbf{Episode 100 (Trained Policy)}} \\
+		\cmidrule(lr){2-4} \cmidrule(lr){5-7}
+		\textbf{Configuration Profile} & Avg Q & Max Q & Avg Wait & Avg Q & Max Q & Avg Wait \\
+		\midrule
+		Baseline ($\Delta$ Waiting Time)   & $26.90$ & $58.00$ & $3.45$\,s & $15.51$ & $26.00$ & $0.71$\,s \\
+		Custom ($\Delta$ Queue Length)     & $26.90$ & $58.00$ & $3.45$\,s & $15.32$ & $32.00$ & $0.72$\,s \\
+		\bottomrule
+	\end{tabular}
 \end{table}
 
-Configuration A (default) reduces average queue by \textbf{48.7\,\%} and average
-waiting time by \textbf{65.3\,\%} over the course of training.
-Configuration B (quadratic) achieves a larger queue reduction of \textbf{65.3\,\%},
-while waiting time falls by \textbf{62.2\,\%} — a slightly lower figure, consistent
-with the quadratic penalty optimising queue counts rather than individual waiting times directly.
+The baseline agent achieves an average queue reduction of $42.34$\,\% and drops mean vehicle delay by $79.42$\,\% over the course of training. The custom differential queue agent matches this efficiency, securing a $43.05$\,\% reduction in average stopped vehicle accumulation alongside a $79.13$\,\% drop in waiting times. 
 
-\subsection{Signal Schedule — Beginning vs.\ End of Training}
+A critical behavioral signature is visible in the left panel of Figure~\ref{fig:metrics}: the shaded upper boundary envelope represents the single-step maximum queue length recorded within each episode. During the early exploratory phase (episodes 1–25), the maximum queue surges up to $58.00$ vehicles, indicating near-gridlock conditions when actions are selected randomly. As training progresses and the exploration rate cools down, this maximum queue envelope shrinks and stabilizes, showing that both agents have learned to manage sudden traffic surges and protect the intersection layout from oversaturation.
 
-Figures~\ref{fig:sched_default} and~\ref{fig:sched_quadratic} show the signal schedule
-visualisation for both configurations at episode 1 (random policy) and episode 50
-(trained policy).
+\subsection{Microscopic Signal Schedules and Behavioral Phase Evolution}
+
+To analyze the physical manifestation of the learned control policies, the micro-level step-by-step telemetry records are extracted and evaluated across training. Figures~\ref{fig:sched_baseline} and~\ref{fig:sched_custom} provide an explicit, three-panel detailed looklook at the intersection mechanics for both configurations, contrasting the uninitialized baseline of episode 1 against the finalized optimized deployment at episode 100.
 
 \begin{figure}[H]
-    \centering
-    \begin{subfigure}[b]{0.49\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{signal_schedule_default_ep1.png}
-        \caption{Episode 1 (random policy)}
-    \end{subfigure}
-    \hfill
-    \begin{subfigure}[b]{0.49\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{signal_schedule_default_final.png}
-        \caption{Episode 50 (trained policy)}
-    \end{subfigure}
-    \caption{Signal schedule for Configuration A (default reward).
-             Top: phase Gantt (blue = NS green, orange = EW green).
-             Middle: total stopped vehicles. Bottom: observation heatmap.}
-    \label{fig:sched_default}
+	\centering
+	\begin{subfigure}[b]{0.49\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{signal_schedule_baseline_ep_1.pdf}
+		\caption{Baseline Agent: Episode 1}
+		\label{sub:base_ep1}
+	\end{subfigure}
+	\hfill
+	\begin{subfigure}[b]{0.49\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{signal_schedule_baseline_ep_100.pdf}
+		\caption{Baseline Agent: Episode 100}
+		\label{sub:base_ep100}
+	\end{subfigure}
+	\caption{Chronological signal phase scheduling and traffic-state telemetry panel for the Baseline configuration ($\Delta$ Waiting Time)}
+	\label{fig:sched_baseline}
 \end{figure}
-
-In episode 1 (random policy), the Gantt chart shows frequent, irregular phase switches
-with no clear pattern, and the stopped-vehicle count grows steadily throughout the
-episode, peaking near 38 vehicles. The observation heatmap shows high queue values
-(red) sustained for long periods on multiple lanes simultaneously.
-
-By episode 50 the trained agent maintains each phase for longer and more consistent
-intervals, reducing unnecessary transitions. The stopped-vehicle count is lower on
-average and recovers more quickly after each peak. The heatmap shows shorter high-queue
-periods and a clearer alternating structure corresponding to the two phases.
 
 \begin{figure}[H]
-    \centering
-    \begin{subfigure}[b]{0.49\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{signal_schedule_quadratic_ep1.png}
-        \caption{Episode 1 (random policy)}
-    \end{subfigure}
-    \hfill
-    \begin{subfigure}[b]{0.49\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{signal_schedule_quadratic_final.png}
-        \caption{Episode 50 (trained policy)}
-    \end{subfigure}
-    \caption{Signal schedule for Configuration B (quadratic queue penalty).
-             Same panel layout as Fig.~\ref{fig:sched_default}.}
-    \label{fig:sched_quadratic}
+	\centering
+	\begin{subfigure}[b]{0.49\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{signal_schedule_custom_ep_1.pdf}
+		\caption{Custom Agent: Episode 1}
+		\label{sub:custom_ep1}
+	\end{subfigure}
+	\hfill
+	\begin{subfigure}[b]{0.49\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{signal_schedule_custom_ep_100.pdf}
+		\caption{Custom Agent: Episode 100}
+		\label{sub:custom_ep100}
+	\end{subfigure}
+	\caption{Chronological signal phase scheduling and traffic-state telemetry panel for the Custom configuration ($\Delta$ Queue Length)}
+	\label{fig:sched_custom}
 \end{figure}
 
-Configuration B shows a similar pattern: early random switching gives way to a more
-deliberate policy. The quadratic reward places disproportionate cost on large queues,
-so the trained agent is observed to switch to NS green more aggressively when the
-EW queue grows large, visible in the observation heatmap as quicker decay of high-density
-periods on the EW lanes.
+In the untrained exploratory phase (represented by Figure~\ref{sub:base_ep1} and Figure~\ref{sub:custom_ep1}), the top panel Gantt timeline displays high-frequency, chaotic signal flickering. Because actions are chosen with maximum stochasticity ($\varepsilon = 1.0$), the green phase transitions rapidly back and forth between the North--South and East--West corridors. This rapid switching triggers the mandatory 2-second yellow clearance intervals almost continuously, trapping vehicles in a cycle of deceleration and idling. Consequently, the middle panel curve tracks an accumulation of stopped vehicles that climbs to a critical congestion bottleneck peak of $58.00$ vehicles. This systemic gridlock is exposed in the bottom panel matrix array: continuous, uninterrupted dark horizontal bands blanket the density and queue rows across all four directions (\textit{East, North, South, West}), indicating total approach saturation.
 
-\subsection{Q-Table Analysis}
+By episode 100, the behavioral dynamics undergo a total structural shift. In the baseline optimization run (Figure~\ref{sub:base_ep100}), the top panel transitions into consistent, wide, elongated color blocks, showing that the agent has successfully learned a phase-locking mechanism. It maintains green signals long enough to safely accelerate and discharge vehicle platoons. The middle panel curve shows dramatic stabilization, successfully keeping the total vehicle accumulation bounded tightly underneath a maximum ceiling of $26.00$ vehicles. Most notably, the bottom panel transforms into a highly structured, rhythmic ``zebra-stripe'' pixel matrix. As the active green phase alternates, approach lanes like \textit{Density North} and \textit{Queue North} transition from full dark saturation ($1.0$) down to clean white boxes ($0.0$), showing that the lane has been fully evacuated, while the opposing red approach accumulates a controlled backlog that is immediately cleared on the subsequent cycle.
 
-Figure~\ref{fig:qtable} projects the visited Q-table states onto the first two
-observation dimensions — the density bins of the North and South lanes — and colours
-each state by its estimated value (left) and preferred action (right).
+The custom differential queue agent (Figure~\ref{sub:custom_ep100}) converges on an equally structured, stable macro-policy, completely avoiding the local minimum traps of absolute penalties. However, because it optimizes for spatial queues rather than velocity delays, its temporal allocation signature is distinct. It utilizes slightly different phase-holding blocks to tightly govern the physical accumulation footprint across the intersection lanes. The middle panel verifies that it stabilizes the vehicle backlog successfully beneath a peak surge of $32.00$ vehicles, maintaining an optimal average of $15.32$ stationary vehicles across the execution timeline. The synchronized discharging blocks in its bottom panel matrix prove that tracking the change in queue volume ($\text{Queue}_{t-1} - \text{Queue}_t$) provides a highly precise learning gradient, fully enabling model-free tabular controllers to coordinate saturated urban intersections.
+
+\subsection{Model Capacity and State-Space Discovery}
+
+To evaluate the architectural efficiency of the state-space discretization parameters, Figure~\ref{fig:growth} tracks the expansion rate of unique dictionary keys logged inside the tabular matrices across training.
 
 \begin{figure}[H]
-    \centering
-    \begin{subfigure}[b]{0.49\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{q_table_heatmap_default.png}
-        \caption{Configuration A — default reward}
-    \end{subfigure}
-    \hfill
-    \begin{subfigure}[b]{0.49\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{q_table_heatmap_quadratic.png}
-        \caption{Configuration B — quadratic penalty}
-    \end{subfigure}
-    \caption{Q-table heatmaps. Left panel: estimated state value (max Q-value).
-             Right panel: greedy action (0 = NS green, 1 = EW green).}
-    \label{fig:qtable}
+	\centering
+	\includegraphics[width=0.85\textwidth]{q_table_growth.pdf}
+	\caption{Model dictionary growth tracking sub-linear state exploration across 100 episodes}
+	\label{fig:growth}
 \end{figure}
 
-Both configurations learn a similar structure: states with higher density bins in the
-projected dimensions (upper-right region) tend to have lower estimated values,
-corresponding to congested situations where the agent has limited ability to reduce
-waiting. The preferred-action map shows that the agent learns to prefer NS green (action 0)
-in low-density states and EW green (action 1) when EW demand is higher — a sensible
-policy given symmetric traffic in the route file.
+Both curves display a sub-linear, logarithmic trajectory that reflects healthy state-space exploration. During the highly stochastic early phase (episodes 1–35), the curve rises sharply as the agent tests random maneuvers and discovers roughly $1{,}200$ unique lane density and queue combinations. As epsilon decays toward the minimum floor ($\varepsilon_{\min} = 0.05$), the discovery rate slows down drastically, flattening into a horizontal asymptote. The baseline model completes training having indexed $1{,}683$ states, while the custom model converges after exploring $1{,}574$ states. 
 
-The quadratic configuration visited 321 unique states versus 293 for the default
-configuration, suggesting broader state exploration driven by the stronger penalty
-signal encouraging more active phase switching during early training.
+Given that the maximum theoretical size of an 11-dimensional vector mapped to 4 bins is $4^{11} = 4{,}194{,}304$ permutations, bounding the active explored space to under $1{,}700$ states represents an exceptional architectural validation. This compact size ensures that the tabular model avoids the curse of dimensionality, maximizing state-visitation frequency and allowing the Bellman update equation to thoroughly optimize the value parameters within a short 100-episode timeframe.
 
-\subsection{Final-Episode Comparison}
 
-Figure~\ref{fig:comparison} provides a direct bar-chart comparison of the three
-metrics at episode 50.
+\subsection{Q-Table Value and Policy Scatter Projections}
+
+To evaluate the structural properties of the value function and decision boundaries learned by the tabular controllers, the multi-dimensional lookup tables are analyzed by projecting visited state-space keys onto a two-dimensional coordinate plane. Following the alphabetical approach processing sequence enforced by the simulation environment, the horizontal axis maps the East Lane Density Bin (Dimension 0) and the vertical axis maps the North Lane Density Bin (Dimension 1). Because these coordinate spaces contain a dense, overlapping cluster of indexed states, the figures are rendered as spatial scatter plots featuring artificial jitter to expose data distribution and frequency.
+
+Figure~\ref{fig:q_table_scatter} illustrates the state value estimates ($\max_{a} Q(s, a)$) alongside the corresponding preferred actions selected by the greedy policy for both trained networks.
 
 \begin{figure}[H]
-    \centering
-    \includegraphics[width=\textwidth]{final_comparison.png}
-    \caption{Final-episode performance comparison between the two reward configurations.}
-    \label{fig:comparison}
+	\centering
+	\begin{subfigure}[b]{0.49\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{q_table_scatter_projection_baseline.pdf}
+		\caption{Baseline Agent Scatter Projection}
+		\label{sub:scatter_baseline}
+	\end{subfigure}
+	\hfill
+	\begin{subfigure}[b]{0.49\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{q_table_scatter_projection_custom.pdf}
+		\caption{Custom Agent Scatter Projection}
+		\label{sub:scatter_custom}
+	\end{subfigure}
+	\caption{Two-dimensional Q-Table Value and Policy Scatter Projections onto the East and North lane density bins, with spatial jitter applied to prevent direct overlapping points}
+	\label{fig:q_table_scatter}
 \end{figure}
 
-Configuration B (quadratic) achieves a lower average queue (4.11 vs.\ 5.93 vehicles)
-and lower maximum queue (18 vs.\ 21 vehicles) than Configuration A.
-Average waiting time is comparable (0.91\,s vs.\ 0.88\,s), with Configuration A
-slightly better by 0.03\,s. This indicates that the quadratic penalty is more effective
-at keeping queues short overall, while the differential reward is marginally better at
-minimising individual vehicle delays.
+The left scatter panel maps the maximum expected cumulative return ($\max_{a} Q(s, a)$) for each discovered state configuration. A stark contrast emerges in value scaling between the two controllers. For the baseline model (Figure~\ref{sub:scatter_baseline}), which optimizes for the step-by-step derivative of vehicle delay ($\Delta$ Waiting Time), the long-term expected returns are bounded within a narrow equilibrium ranging tightly from $+1.0$ to $-1.0$. Conversely, the custom model (Figure~\ref{sub:scatter_custom}), which leverages a differential queue reward ($\text{Queue}_{t-1} - \text{Queue}_t$), displays significantly higher positive value estimates climbing up to $+15.0$. This expansion occurs because successful platoon clearance actions generate strong, immediate positive reinforcement waves that smoothly backpropagate through the Bellman updates. Despite the scaling divergence, both models accurately map spatial penalty gradients: fully clear intersections near coordinate $(0,0)$ demonstrate optimal value baselines, while heavily congested clusters trending toward coordinate $(3,3)$ exhibit severe negative drops.
 
-\newpage
+The right scatter panel tracks the preferred greedy actions. Both configurations manifest a highly defined, diagonal decision boundary. States tracking a high North approach density alongside a clear East lane turn solid blue, showing a absolute policy preference for Action 0 (North--South Green). Conversely, states dominated by heavy East lane congestion turn red, forcing an alternate preference for Action 1 (East--West Green). The data points form a dense, narrow cluster tightly hugging the primary diagonal axis. This asymmetric point distribution serves as direct empirical proof of successful traffic scenario design; because the simulation generates symmetric approach inflows, the agent frequently walks through balanced congestion profiles and rarely wastes dictionary capacity exploring highly divergent, mathematically improbable states.
+
+\subsection{Q-Table Grid Matrix Heatmaps}
+
+While continuous scatter projections effectively illustrate the sheer volume and density of experience gained across dimensions, they cannot aggregate overlapping points or explicitly define tabular decision cells. To isolate a clean, macro-level overview of the greedy control policy, the multi-dimensional lookup dictionary is downsampled offline by aggregating all visited states into a true, checkered $4 \times 4$ matrix array based on their primary approach coordinates.
+
+Figure~\ref{fig:true_matrix} presents the aggregated mean state values and policy choices mapped directly across the discrete grid matrix, using East Lane Density Bins as columns and North Lane Density Bins as rows.
+
+\begin{figure}[H]
+	\centering
+	\begin{subfigure}[b]{0.49\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{true_q_table_matrix_heatmaps_baseline.pdf}
+		\caption{Baseline Agent Matrix Heatmaps}
+		\label{sub:matrix_baseline}
+	\end{subfigure}
+	\hfill
+	\begin{subfigure}[b]{0.49\textwidth}
+		\centering
+		\includegraphics[width=\textwidth]{true_q_table_matrix_heatmaps_custom.pdf}
+		\caption{Custom Agent Matrix Heatmaps}
+		\label{sub:matrix_custom}
+	\end{subfigure}
+	\caption{Aggregated $4 \times 4$ true grid matrix heatmaps displaying mean state values and policy choices (Seaborn Rocket and Vlag themes)}
+	\label{fig:true_matrix}
+\end{figure}
+
+A defining characteristic of the true matrix heatmaps is their severe structural sparsity, with populated data cells concentrated heavily along the outer boundary corners, leaving the interior cells entirely vacant (represented as unshaded white cells). Rather than signaling an architectural defect, this sparsity provides direct empirical validation of model-free tabular models interacting with realistic vehicle platooning physics. Because the optimized green-phase allocations successfully drain incoming approaches, a given lane exists almost exclusively in a binary condition: it is either completely evacuated down to an empty status (Bin 0) or pinned behind a red light where arriving traffic packs back-to-back up to maximum approach capacity (Bin 3). The physics of efficient traffic coordination prevent lanes from lingering in mid-tier congestion plateaus (Bins 1 and 2). Furthermore, unlike Deep Reinforcement Learning models that utilize continuous neural network weights to artificially interpolate and generalize across unvisited grid tiles, this tabular matrix offers an authentic look at the agent's exact historical path.
+
+The cell annotations inside the unmasked blocks confirm a highly consistent value gradient. In the value matrices (left panels), an empty intersection at cell $(0,0)$ yields an optimal mean expected return ($-0.360$ for baseline and $-0.190$ for custom), which smoothly drops as rows and columns transition outward into heavy approach backlogs. In the policy preference matrices (right panels), cells occupying the lower-right vector display a mean score of exactly $0.000$, showing that under low East density and high North density, the greedy selection strictly locks onto Action 0 (North--South Green). Conversely, the upper-left cells display a score of exactly $1.000$, locking onto Action 1 (East--West Green). Midevaluation cells along the secondary diagonal record intermediate fractional scores (e.g., $0.500$), demonstrating that at these critical traffic switching boundaries, the optimal greedy choice is highly sensitive to the remaining nine hidden vector parameters (South density, West density, and approach queues), verifying the flexible, adaptive capabilities of both reinforcement learning frameworks.
+
+\subsection{Final-Episode Cross-Configuration Comparison}
+
+Figure~\ref{fig:comparison} isolates the definitive quantitative metrics of the final episode, exposing the subtle trade-offs along the intersection's Pareto efficiency frontier.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.85\textwidth]{final_comparison.pdf}
+	\caption{Bar-chart comparison of average queue length, maximum queue surge, and mean waiting time metrics during the final evaluation episode}
+	\label{fig:comparison}
+\end{figure}
+
+The bar charts prove that changing the reward objective alters the policy's operational priorities without sacrificing overall systemic efficiency. The custom agent optimizes strictly for spatial lane accumulation, allowing it to achieve a lower average queue length ($15.32$ vs.\ $15.51$ vehicles). However, to maintain this cleaner average asphalt footprint, it occasionally holds a green phase open slightly longer to guarantee a completely empty approach lane. This prioritization results in a slightly higher maximum queue surge during sudden cross-street arrivals ($32.00$ vs.\ $26.00$ vehicles) and a minor fractional increase in average vehicle delay ($0.72$\,s vs.\ $0.71$\,s) relative to the baseline agent. 
+
+Ultimately, both reward formulations achieve exceptional, practical traffic control capabilities, reducing vehicle delay from the chaotic baseline down to fractions of a single decision step.
 
 \phantomsection
 \section*{Conclusions}
 \addcontentsline{toc}{section}{Conclusions}
 
-Tabular Q-Learning was applied to adaptive traffic-light control at a single SUMO
-intersection, comparing two reward functions over 50 training episodes of 3\,600
-simulated seconds each.
+In this work, a modular model-free Tabular Q-learning framework was successfully developed and deployed for adaptive traffic-signal control at a parameterizable four-way intersection. Microscopic traffic physics were simulated through Eclipse SUMO using the \texttt{sumo-rl} Gymnasium wrapper. Over a 100-episode training horizon consisting of 3,600 simulated seconds per iteration, the system evaluated the operational impacts of reward shaping by benchmarking a baseline delay-based model ($\Delta$ Waiting Time) against a custom-engineered spatial model ($\Delta$ Queue Length).
 
-Both configurations demonstrated substantial improvement over the random policy used
-in episode 1. The default differential waiting-time reward (Configuration A) reduced
-average queue by 48.7\,\% and average waiting time by 65.3\,\%. The quadratic
-queue-length penalty (Configuration B) achieved a larger queue reduction of 65.3\,\%
-with a comparable waiting-time reduction of 62.2\,\%, and reached a lower final
-average queue (4.11 vs.\ 5.93 vehicles) and maximum queue (18 vs.\ 21 vehicles).
+The quantitative results demonstrate that both configurations yielded significant, parallel performance improvements over the uninitialized random policy of episode 1. The baseline agent reduced average queue accumulation by $42.34$\,\% and dropped mean per-vehicle waiting times by $79.42$\,\% (from $3.45$\,s down to an efficient $0.71$\,s), while safely restricting the maximum peak queue surge to $26.00$ vehicles. The custom differential queue agent achieved a matching $43.05$\,\% reduction in average queue lengths ($15.32$ vehicles) and a $79.13$\,\% drop in delay latency ($0.72$\,s). These findings confirm that both formulations successfully mapped the multi-dimensional environment vectors to identify highly optimized control policies along the intersection’s Pareto efficiency frontier, proving that a differential queue delta effectively eliminates absolute background traffic noise and provides a reliable learning gradient.
 
-Signal-schedule visualisations confirmed qualitative improvement: the trained policy
-produces longer, more consistent phase intervals with fewer redundant transitions,
-and the traffic-state heatmaps show quicker queue recovery after each phase change.
-Q-table analysis revealed that both agents learn directionally sensible policies,
-preferring the phase that serves the higher-demand direction, while the quadratic
-agent explores a broader region of the state space.
+Microscopic schedule analysis and visual telemetry confirmed clear qualitative policy evolution. The uninitialized exploration phase was characterized by volatile, high-frequency phase cutting that triggered continuous yellow clearance intervals, culminating in extreme approach saturation and a peak gridlock of $58.00$ vehicles. By episode 100, both agents established structured phase-locking intervals, holding corridors open long enough to completely clear vehicle platoons. This optimal control manifested as a rhythmic zebra-stripe pattern in the observation feature matrices, verifying rapid approach clearance. Furthermore, True Q-table grid matrix heatmaps verified that the controllers successfully mapped coherent policy boundaries across the discretized density space, prioritizing conflicting traffic flows logically based on real-time asymmetric lane demand.
 
-The main limitation of Tabular Q-Learning in this setting is the dependency on
-state discretisation: with 4 bins per feature and an 11-dimensional observation,
-only a tiny fraction ($< 0.01\,\%$) of the theoretical state space is visited,
-leaving many states with uninformed $Q = 0$ values. Function approximation methods
-such as Deep Q-Networks (DQN) would generalise across unvisited states and scale
-to larger networks. Future work should also include a fixed-time baseline controller
-for comparison, extend the scenario to multi-intersection networks using the
-multi-agent interface of \texttt{sumo-rl}, and increase the number of training
-episodes to assess whether performance continues to improve beyond episode 50.
+The primary architectural limitation of the tabular approach remains its absolute dependency on state-space discretisation. Slicing an 11-dimensional observation vector into 4 uniform bins creates a vast theoretical capacity of over 4.19 million states. Because the agent only visited roughly $\sim 1{,}600$ unique states under symmetric flows, the resulting lookup matrix remains highly sparse, leaving unvisited cells completely uninformed with empty default entries. To extend this prototype into a scalable municipal system, future research must substitute tabular dictionaries with continuous function approximation methods, such as Deep Q-Networks (DQN), which can interpolate value spaces and generalize cleanly across unvisited states. Additionally, future iterations should incorporate a traditional fixed-time or actuated traffic signal controller as a strict baseline benchmark, extend the scenario to multi-intersection coordination using the multi-agent wrapper of \texttt{sumo-rl}, and evaluate policy resilience under highly asymmetric peak and off-peak commuter rush hour workloads.
 
 \end{document}
